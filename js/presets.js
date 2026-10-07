@@ -184,7 +184,7 @@
   C.push(ch('イスカンダル', 'ライダー', ['B', 'A', 'E', 'C', 'A+'], ['中立・善', '人属性', '神性'], [
     sk('騎乗', 'A+', 'class', 10, [blk('turnStart', [fx('summon', { char: '神威の車輪', value: '1', pos: 'front', life: 'battle', link: true })])], { uses: once('battle'), note: '自陣営の最初の手番開始時に乗騎「神威の車輪」を召喚（1戦闘1回）。' }),
     sk('神性', 'C', 'skill', 5, [], { heroBonus: 10, note: 'キャラシート作成時、サーヴァントの英雄点10を得る（令呪コストの予算に加算）。' }),
-    charisma('A'),
+    sk('カリスマ', 'A', 'skill', 5, [blk('allyAttacked', [fx('redirect', { dest: '自分, 神威の車輪, 王の軍勢' })])], { note: '相手の攻撃時、攻撃対象を自分か「神威の車輪」「王の軍勢」に変更できる（奇襲防御の補正値は無し）。AIは失うものの重さで判断し、王の軍勢は半数割れで崩れない範囲で盾にする。' }),
     sk('王の軍勢', 'EX', 'np', 0, [blk('turnStart', [fx('territoryBreak'), fx('summon', { char: '王の軍勢', value: 'd(3,6)', pos: 'front', life: 'engagement', link: true, collapse: true, territory: true })])], { res: np(), note: '自分の手番開始時に固有結界を展開し、乗騎「王の軍勢」を3D6体召喚。発動時に陣地破壊が発生。陣地（と軍勢）は交戦フェイズ終了時、軍勢の総数が半分以下になった時、イスカンダルが倒れた時、相手の陣地破壊で消滅。' }),
   ]));
   C.push(ch('神威の車輪', '乗騎', ['EX', 'A', 'C', 'E', 'E'], ['乗騎'], [], { resources: [] }));
@@ -609,7 +609,7 @@
     },
   ];
 
-  const presets = { rules, states, characters: C, scenarios, version: 9, removedNames: ['【サンプル】災厄の黒竜'], removedScenarios: ['PC4騎 vs サンプルボス', 'ライダー＋ペガサス vs バーサーカー'] };
+  const presets = { rules, states, characters: C, scenarios, version: 10, removedNames: ['【サンプル】災厄の黒竜'], removedScenarios: ['PC4騎 vs サンプルボス', 'ライダー＋ペガサス vs バーサーカー'] };
   if (typeof module !== 'undefined' && module.exports) module.exports = presets;
   else root.TRPGPresets = presets;
 })(typeof self !== 'undefined' ? self : this);
