@@ -67,6 +67,7 @@
     for (const c of D.characters) if (!c.csCostMode) c.csCostMode = 'manual';
     if (!D.rules.heroBudget) D.rules.heroBudget = { base: 30, perCs: 5 };
     for (const sc of D.scenarios) if (sc.rounds && sc.rounds.mode === 'teams') sc.rounds.mode = 'pl';
+    if ((D.version || 1) < 6) for (const sc of D.scenarios) for (const t of sc.teams) t.support = true;
     removeObsolete();
     D.version = pre.version;
     return { added, updated };
@@ -325,7 +326,7 @@
   // 共通：説明文
   // ------------------------------------------------------------------
   const KIND_LABEL = { class: 'クラス', skill: 'スキル', np: '宝具' };
-  const PER_LABEL = { round: '1巡', engagement: '1交戦', battle: '1戦闘' };
+  const PER_LABEL = { round: '1巡', engagement: '交戦フェイズ', battle: 'セッション' };
   function typeNames(types) { return (types || []).map((k) => { const t = D.rules.attackTypes.find((x) => x.key === k); return t ? t.name : k; }).join('・'); }
   function describeEffect(e) {
     const T = E.EFFECT_TYPES[e.type];
@@ -345,7 +346,7 @@
       case 'negateIncoming': return `受ける攻撃の${e.names || e.kinds}補正無効`;
       case 'endure': return e.value && e.value !== '1' ? `HP${e.value}で復活` : 'HP1で耐える';
       case 'reshape': return 'ステータス振り直し';
-      case 'summon': return `「${e.char}」を${e.value && e.value !== '1' ? e.value + '体' : ''}召喚${e.life === 'engagement' ? '（交戦終了まで）' : ''}`;
+      case 'summon': return `「${e.char}」を${e.value && e.value !== '1' ? e.value + '体' : ''}召喚${e.life === 'engagement' ? '（交戦フェイズ終了まで）' : ''}`;
       default: return T.label;
     }
   }
@@ -465,6 +466,7 @@
       else if (p === 'pos') e.pos = 'front';
       else if (p === 'life') e.life = 'battle';
       else if (p === 'link') e.link = false;
+      else if (p === 'collapse') e.collapse = false;
       else if (p === 'kinds') e.kinds = e.type === 'suppressSelf' ? 'skill' : '';
       else e[p] = '';
     }
@@ -502,8 +504,9 @@
         case 'name': label = 'フラグ'; ctl = sel(e, 'name', E.FLAGS); break;
         case 'char': label = '召喚する'; ctl = sel(e, 'char', D.characters.map((c) => [c.name, c.name])); break;
         case 'pos': label = '配置'; ctl = sel(e, 'pos', [['front', '前衛'], ['back', '後衛']]); break;
-        case 'life': label = '持続'; ctl = sel(e, 'life', [['battle', '戦闘終了まで'], ['engagement', '交戦フェイズ終了まで']]); break;
+        case 'life': label = '持続'; ctl = sel(e, 'life', [['battle', 'セッション終了まで'], ['engagement', '交戦フェイズ終了まで']]); break;
         case 'link': ctl = chk(e, 'link', '召喚者が倒れたら消滅'); break;
+        case 'collapse': ctl = chk(e, 'collapse', '残りが召喚数の半分以下で全て消滅', { title: '王の軍勢の「総数が半分以下になっても陣地は消滅する」のような群体用' }); break;
         case 'profiles': label = '候補（| 区切り）'; ctl = txt(e, 'profiles', { cls: 'expr', ph: 'STR:EX, END:A, … | STR:A, END:EX, …' }); ctl.style.width = '420px'; ctl.style.maxWidth = '100%'; break;
         default: break;
       }
@@ -547,8 +550,8 @@
     return {
       id: uid('sc'), name: '新しいテストケース',
       teams: [
-        { name: '陣営A', flags: '', support: false, members: c[0] ? [{ charId: c[0].id, pos: 'front', key: false }] : [] },
-        { name: '陣営B', flags: '', support: false, members: c[1] ? [{ charId: c[1].id, pos: 'front', key: false }] : [] },
+        { name: '陣営A', flags: '', support: true, members: c[0] ? [{ charId: c[0].id, pos: 'front', key: false }] : [] },
+        { name: '陣営B', flags: '', support: true, members: c[1] ? [{ charId: c[1].id, pos: 'front', key: false }] : [] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 3000, seed: Math.floor(Math.random() * 1e6), logTrials: 3,
     };
@@ -568,7 +571,7 @@
     const sc = currentScenario();
     const left = h('section', { class: 'panel stack', 'aria-label': 'テストケース' });
     if ((D.version || 1) < (PRE.version || 1)) {
-      left.appendChild(h('div', { class: 'notice' }, '初期データが更新されています（英雄点から初期令呪を自動計算、巡数＝参加PL数、ギルガメッシュ・エルキドゥ・ヘラクレス、ライダーの途中召喚など）。保存データの初期キャラクターは古い定義のままなので、最新版への更新をおすすめします。',
+      left.appendChild(h('div', { class: 'notice' }, '初期データが更新されています（陣地破壊、ジャンヌ宝具のデバフ無効、メルトのドレイン解除、援護AIが補正値ペナルティの谷を越えるように、召喚体は召喚者の脱落で消滅、王の軍勢の半数消滅、複数の味方による援護の重ね掛け、英雄点から初期令呪を自動計算、巡数＝参加PL数、ギルガメッシュ・エルキドゥ・ヘラクレス、ライダーの途中召喚など）。保存データの初期キャラクターは古い定義のままなので、最新版への更新をおすすめします。',
         h('div', { class: 'row', style: { marginTop: '6px' } },
           btn('最新版に更新（初期キャラを上書き）', () => { const r = mergePresets(true); save(); render(); toast(`${r.added}件を追加、${r.updated}件の初期キャラクターを最新版にしました`); }, 'sm primary'),
           btn('追加のみ（編集を残す）', () => { const r = mergePresets(false); save(); render(); toast(`${r.added}件を追加しました（既存のキャラクターはそのまま）`); }, 'sm'),
@@ -583,7 +586,7 @@
     left.appendChild(field('名前', txt(sc, 'name', { onChange: () => render() })));
 
     sc.teams.forEach((t, ti) => left.appendChild(teamCard(sc, t, ti)));
-    if (sc.teams.length < 6) left.appendChild(h('div', null, btn('＋ 陣営を追加', () => { sc.teams.push({ name: '陣営' + String.fromCharCode(65 + sc.teams.length), flags: '', support: false, members: [] }); save(); render(); }, 'sm')));
+    if (sc.teams.length < 6) left.appendChild(h('div', null, btn('＋ 陣営を追加', () => { sc.teams.push({ name: '陣営' + String.fromCharCode(65 + sc.teams.length), flags: '', support: true, members: [] }); save(); render(); }, 'sm')));
 
     sc.rounds = sc.rounds || { mode: 'teams', value: 2 };
     const roundVal = num(sc.rounds, 'value', { min: 1, cls: 'w-num', label: '固定の巡数' });
@@ -592,7 +595,7 @@
     left.appendChild(h('h3', null, '試験条件'));
     left.appendChild(h('div', { class: 'grid' },
       field('交戦フェイズの巡数', h('div', { class: 'row tight' }, sel(sc.rounds, 'mode', [['pl', '参加PL数（ルール準拠）'], ['teams', '陣営数'], ['units', '参加キャラ数'], ['fixed', '固定']], { onChange: () => { roundVal.disabled = sc.rounds.mode !== 'fixed'; } }), roundVal)),
-      field('最大交戦回数', num(sc, 'maxEngagements', { min: 1, max: 100 }), { title: 'この回数の交戦フェイズで決着しなければ引き分け' }),
+      field('最大ターン数', num(sc, 'maxEngagements', { min: 1, max: 100 }), { title: '1ターンに1回交戦フェイズがある前提。このターン数で決着しなければ引き分け' }),
       field('試行回数', num(sc, 'trials', { min: 1, max: 1000000, step: 100 })),
       field('乱数シード', txt(sc, 'seed', { cls: 'expr' }), { title: '同じシードなら同じ結果を再現できます' }),
       field('詳細ログを残す試行数', num(sc, 'logTrials', { min: 0, max: 50 }))));
@@ -614,7 +617,7 @@
       sc.teams.length > 2 ? btn('×', () => { sc.teams.splice(ti, 1); save(); render(); }, 'ghost icon sm', { title: '陣営を削除', 'aria-label': '陣営を削除' }) : null));
     card.appendChild(h('div', { class: 'row' },
       h('div', { style: { flex: '1 1 140px', minWidth: 0 } }, txt(t, 'flags', { ph: '陣営フラグ（例: 陣地, 同盟）', label: '陣営フラグ' })),
-      chk(t, 'support', '援護を使う', { title: '味方が前衛に2人以上いる時、AIが有利と判断すれば援護（行動を消費して能力値を補正値として与える）を行います' })));
+      (() => { t.support = t.support !== false; return chk(t, 'support', '援護を使う', { title: '味方の前衛が2人以上いる時、AIが有利と判断すれば援護を行います。1回の攻撃に複数の援護を重ねられ、補正値ペナルティを考慮して人数を決めます' }); })()));
     t.csMode = t.csMode || 'auto'; t.csAI = t.csAI || 'normal';
     card.appendChild(h('div', { class: 'row' },
       h('span', { class: 'small muted', title: '3画 − サーヴァントの令呪コストで開始。「積極的」は攻撃の振り直しにも使う' }, '令呪'),
@@ -808,10 +811,10 @@
     box.append(bar, legend);
 
     box.append(h('div', { class: 'kpis' },
-      kpi(fmt(r.rounds.mean, 2), '平均 巡数（全交戦合計）'),
+      kpi(fmt(r.rounds.mean, 2), '平均 巡数（全ターン合計）'),
       kpi(fmt(r.rounds.median, 1), '巡数 中央値'),
       kpi(`${r.rounds.min}〜${r.rounds.max}`, '巡数 最短〜最長'),
-      kpi(fmt(r.engagements.mean, 2), '平均 交戦フェイズ数'),
+      kpi(fmt(r.engagements.mean, 2), '平均 ターン数'),
       kpi(r.trials.toLocaleString(), '試行回数')));
 
     box.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h3', null, '決着までの巡数の分布'), histogram(r.rounds.hist, r.trials)));
@@ -1070,7 +1073,7 @@
       strip.append(
         h('div', null, h('span', { class: 'small muted' }, '最大HP（目安）'), h('b', null, E.previewMaxHp(D.rules, c))),
         h('div', null, h('span', { class: 'small muted' }, '英雄点'), h('b', null, hp2.total), h('span', { class: 'small muted num' }, `（ステ ${hp2.stat}・スキル ${hp2.skill}）`)),
-        h('div', null, h('span', { class: 'small muted' }, 'EX振り直し'), h('b', null, ex), h('span', { class: 'small muted' }, '回／交戦')));
+        h('div', null, h('span', { class: 'small muted' }, 'EX振り直し'), h('b', null, ex), h('span', { class: 'small muted' }, '回／交戦フェイズ')));
     }
     paintSummary();
     panel.append(strip);
@@ -1164,7 +1167,7 @@
       field('種別', sel(s, 'kind', [['class', 'クラススキル'], ['skill', 'スキル'], ['np', '宝具']], { onChange: rerender })),
       field('英雄点コスト', num(s, 'cost', { onChange: rerender }))));
     body.append(h('div', { class: 'grid wide' },
-      field('使用回数（空欄＝無制限）', h('div', { class: 'row tight' }, num(s.uses, 'max', { allowEmpty: true, min: 1, cls: 'w-num', ph: '∞', label: '最大回数' }), sel(s.uses, 'per', [['round', '1巡ごと'], ['engagement', '1交戦ごと'], ['battle', '1戦闘（セッション）']], { label: 'リセット単位' }))),
+      field('使用回数（空欄＝無制限）', h('div', { class: 'row tight' }, num(s.uses, 'max', { allowEmpty: true, min: 1, cls: 'w-num', ph: '∞', label: '最大回数' }), sel(s.uses, 'per', [['round', '1巡ごと'], ['engagement', '交戦フェイズごと'], ['battle', 'セッション中']], { label: 'リセット単位' }))),
       field('消費リソース', h('div', { class: 'row tight' }, sel(resObj, 'key', resKeys, { onChange: (v) => { s.resource = v ? { key: v, amount: +resObj.amount || 1 } : null; save(); rerender(); } }),
         s.resource ? num(s.resource, 'amount', { min: 1, cls: 'w-num', label: '消費量' }) : null)),
       field('令呪消費（発動に必要な画数）', num(s, 'csUse', { min: 0, max: 3, ph: '0' }), { title: 'エヌマ・エリシュのように令呪を消費して発動する宝具用。令呪が足りないと使えません' }),
@@ -1323,7 +1326,7 @@
           save(); rer();
         } })),
         field('種類', chk(s, 'debuff', 'デバフとして扱う（デバフ無効・解除の対象）')),
-        field('持続', h('div', { class: 'row tight' }, sel(s, 'duration', [['engagement', '交戦フェイズ終了まで'], ['battle', '戦闘終了まで'], ['rounds', '指定の巡数']], { onChange: rer }),
+        field('持続', h('div', { class: 'row tight' }, sel(s, 'duration', [['engagement', '交戦フェイズ終了まで'], ['battle', 'セッション終了まで'], ['rounds', '指定の巡数']], { onChange: rer }),
           s.duration === 'rounds' ? num(s, 'durationValue', { min: 1, cls: 'w-num', label: '巡数' }) : null)),
         field('回数（0＝無制限）', num(s, 'charges', { min: 0 }), { title: '判定に効いた回数でカウントし、0になると解除' })));
       right.append(field('メモ', (() => { const t = h('textarea', { rows: 2 }); t.value = s.note || ''; t.addEventListener('input', () => { s.note = t.value; save(); }); return t; })()));
@@ -1379,7 +1382,7 @@
         field('最大HPの式', txt(R, 'hpFormula', { expr: true, ph: 'END*5' })),
         field('レベルドレインでHPが変わる能力値', sel(R, 'hpStat', [['', 'なし']].concat(statOpts))),
         field('その能力値1あたりのHP', num(R, 'hpPerStat'))),
-      h('div', { class: 'row' }, chk(R.penalty, 'enabled', '補正値ペナルティを使う'), chk(R, 'exRerolls', 'EXランクの振り直し（交戦ごとにEXの数だけ）')),
+      h('div', { class: 'row' }, chk(R.penalty, 'enabled', '補正値ペナルティを使う'), chk(R, 'exRerolls', 'EXランクの振り直し（交戦フェイズごとにEXの数だけ）')),
       h('div', { class: 'grid' },
         field('ペナルティ開始（補正値がこれを超えたら）', num(R.penalty, 'threshold')),
         field('面数−1 ごとの補正値', num(R.penalty, 'step', { min: 1 })),
@@ -1546,7 +1549,7 @@
       btn('全選択', () => { R.ids = pool.map((c) => c.id); save(); render(); }, 'ghost sm'),
       btn('全解除', () => { R.ids = []; save(); render(); }, 'ghost sm'),
       h('span', { class: 'small muted' }, `${R.ids.length}体 → ${(R.ids.length * (R.ids.length - 1)) / 2}組`)));
-    p.append(h('div', { class: 'grid' }, field('1組あたりの試行回数', num(R, 'trials', { min: 10, step: 50 })), field('最大交戦回数', num(R, 'maxEngagements', { min: 1 }))));
+    p.append(h('div', { class: 'grid' }, field('1組あたりの試行回数', num(R, 'trials', { min: 10, step: 50 })), field('最大ターン数', num(R, 'maxEngagements', { min: 1 }))));
     p.append(h('div', { class: 'run-bar' }, btn('総当たり実行', runRR, 'primary', { disabled: UI.running ? true : null }), UI.running ? btn('中止', () => Runner.cancel(), 'danger') : null, h('span', { id: 'rr-progress', class: 'small muted num' })));
     const r = UI.rrResult;
     if (r && r.error) p.append(h('div', { class: 'notice err' }, r.error));
@@ -1614,14 +1617,17 @@
         h('li', null, '試行回数とシードを決めて「シミュレーション実行」。勝率、巡数の分布、キャラ別の死亡率・ダメージ、スキルの使用回数、詳細ログが出ます。'),
         h('li', null, '数値を変えて再実行し、「比較用に保存」で案同士を並べます。'),
         h('li', null, '「比較・スイープ・総当たり」で、HPや補正値を範囲で動かした勝率曲線や、キャラ同士の相性表を作れます。')),
-      h('h3', null, '再現している交戦ルール'),
+      h('h3', null, '用語と再現している範囲'),
+      h('p', null, 'ターン＝移動・遭遇・交戦の全フェイズの一巡り、フェイズ＝移動・遭遇・交戦それぞれ、巡＝交戦フェイズ内の手番の一巡り。シミュレーターは各ターンの交戦フェイズだけを戦わせます。決着しなければ次のターンの交戦フェイズへ進み、その間の移動フェイズの効果（被虐の誉れの回復など）だけを処理します。'),
       h('ul', null,
         h('li', null, '先手判定：各陣営の前衛から代表1人（AIが期待値最大の者を選ぶ）が（敏捷＋補正）D6。出目順に陣営の行動順が決まります。'),
+        h('li', null, '陣地：陣営フラグ「陣地」（陣地作成）、陣地扱いの状態（無限の剣製・パンドラボックス）、固有結界の召喚体（王の軍勢）は、相手の「陣地破壊」で消えます。'),
         h('li', null, '巡：既定は「参加PL数」ぶん（マスターと契約サーヴァントで1人、マスター未配置のサーヴァントも1人と数える）。「1巡の間」の効果は、付与された者の手番が1回終わるまで続きます。各巡で陣営ごとに前衛が1回ずつ行動。決着しなければ交戦フェイズを繰り返し、最大交戦回数で引き分け。'),
         h('li', null, '攻撃：物理（筋力）・魔術（魔力）・奇襲（幸運、要フラグ）。攻撃値−防御値がダメージ。後衛は攻撃されません。'),
-        h('li', null, '補正値ペナルティ（+11以上で10ごとに面数−1、−5以上で面数+1）、面数の上下限、EXランクの振り直し、援護、攻撃対象変更、HP1で耐える、マスターからサーヴァントへのダメージ半減。'),
+        h('li', null, '援護：1回の攻撃に複数の味方が援護を重ねられます。AIは、援護を1体足すごとの攻撃の伸びがその味方の単独攻撃を上回る間だけ追加します（補正値+11以上の面数ペナルティで自然に止まる）。王の軍勢のような弱い召喚体が、強い味方の攻撃をまとめて底上げします。'),
+        h('li', null, '補正値ペナルティ（+11以上で10ごとに面数−1、−5以上で面数+1）、面数の上下限、EXランクの振り直し、攻撃対象変更、HP1で耐える、マスターからサーヴァントへのダメージ半減。'),
         h('li', null, 'マスター：メンバーの ⚙ から「マスター」を指定すると契約関係になります。マスターのスキルは「自分のサーヴァント」を対象にでき（式 isServant(actor)、対象「自分のサーヴァント」）、マスターが倒れるとサーヴァントはマスターのHP分のダメージを受けて交戦終了時に消滅します。マスターの攻撃はサーヴァントへのダメージが半減（DRONE などのフラグで無効）。'),
-        h('li', null, '召喚：効果「召喚」で乗騎や使い魔を戦闘中に呼び出せます（体数は式可、交戦終了で消える／召喚者と運命を共にする、を選択）。結果表では召喚体をまとめて集計します。'),
+        h('li', null, '召喚：効果「召喚」で乗騎や使い魔を戦闘中に呼び出せます（体数は式可、交戦フェイズ終了で消える／召喚者と運命を共にする、を選択）。結果表では召喚体をまとめて集計します。'),
         h('li', null, '消耗：メンバーの ⚙ から開始時のHP（値・割合・ランダム範囲）、宝具・令呪などの残り回数、掛かっている状態、使用済みのスキルを設定できます。スイープの「開始時のHP（%）」で消耗の影響を曲線で見られます。'),
         h('li', null, '対象外：移動・遭遇フェイズ、同盟・裏切り、遠距離攻撃フェイズ、魂喰い、再契約、前衛と後衛の入れ替え行動、移動・RP用の令呪。')),
       h('h3', null, '令呪'),
@@ -1646,7 +1652,7 @@
       h('ul', null,
         h('li', null, code('self'), ' スキルの持ち主、', code('target'), ' 判定やイベントの相手、', code('actor'), ' 判定を行う味方（味方支援系）。'),
         h('li', null, 'それぞれ ', code('.STR'), code('.END'), '…（現在の能力値）、', code('.hp'), code('.maxHp'), code('.hpPct'), code('.damageTaken'), code('.res.np'), ' が使えます。'),
-        h('li', null, code('round'), '（交戦内の巡）、', code('engagement'), '、', code('event.damage'), '（直前のダメージ）、', code('d(3,6)'), '（3D6を振る）、', code('has(target,\'竜種\')'), '、', code('teamFlag(\'陣地\')'), '、', code('hasInitiative()'), '、', code('allyDown()'), '、', code('floor()'), code('min()'), code('max()'), '。')),
+        h('li', null, code('round'), '（その交戦フェイズの何巡目か）、', code('engagement'), '（何ターン目か）', '、', code('event.damage'), '（直前のダメージ）、', code('d(3,6)'), '（3D6を振る）、', code('has(target,\'竜種\')'), '、', code('teamFlag(\'陣地\')'), '、', code('hasInitiative()'), '、', code('allyDown()'), '、', code('floor()'), code('min()'), code('max()'), '。')),
       h('h3', null, 'AI'),
       h('p', null, '攻撃対象と攻撃種別は、期待ダメージ（正規近似）と撃破確率から選びます（キャラごとに「最もHPが低い相手」「指定タグ優先」なども選べます）。回数制限のあるスキルは「使えるときに使う」「効果が大きいときだけ」「HPがしきい値以下のとき」「使わない」から選べます。「まで」付きの補正値は、補正値ペナルティを考慮して期待値が最も高い値を自動で選びます。'),
       h('h3', null, 'データの保存'),

@@ -105,12 +105,13 @@
     st('正気喪失', true, 'engagement', 1, [blk(['initiative', 'attack', 'defend'], [mod(-3)])], '次の判定に-3。'),
     st('強化無効', true, 'engagement', 1, [blk(['initiative', 'attack', 'defend'], [fx('suppressSelf', { kinds: 'skill' })])], 'クラススキル・宝具以外のスキル補正を1回無効。'),
     st('次撃強化+5', false, 'engagement', 1, [blk('attack', [mod(5, true)], { types: [P, M] })], '次の物理・魔術攻撃に5までの補正値。'),
-    st('無限の剣製', false, 'engagement', 0, [blk('attack', [mod(5, true)], { types: [P, M] })], '固有結界内。交戦フェイズ終了まで物理・魔術攻撃に5までの補正値。'),
-    st('行動不能', true, 'rounds', 0, [blk('static', [fx('flag', { name: 'cannotAct' })])], '次の1巡が終わるまで（自分の次の手番が終わるまで）行動できない。', 1),
+    Object.assign(st('無限の剣製', false, 'engagement', 0, [blk('attack', [mod(5, true)], { types: [P, M] })], '固有結界（陣地）内。交戦フェイズ終了まで物理・魔術攻撃に5までの補正値。陣地破壊で消滅。'), { territory: true }),
+    st('行動不能', false, 'rounds', 0, [blk('static', [fx('flag', { name: 'cannotAct' })])], '次の1巡が終わるまで（自分の次の手番が終わるまで）行動できない。', 1),
     st('攻撃不能', true, 'rounds', 0, [blk('static', [fx('flag', { name: 'cannotAct' })])], '1巡の間、行動できない（ILLUSION）。', 1),
     st('ジェスター・サーカス', true, 'rounds', 2, [blk(['initiative', 'attack', 'defend'], [mod(-3)])], '1巡の間、2回まで全ての判定に-3。', 1),
     st('トールハンマー', false, 'rounds', 2, [blk(['attack', 'defend'], [mod(5, true)])], '1巡の間、2回まで先手判定以外の判定に5までの補正値。', 1),
-    st('パンドラボックス', false, 'engagement', 0, [blk('defend', [mod(3)], { types: [P, M] })], '陣地内：物理・魔術防御+3（交戦終了で消滅）。'),
+    Object.assign(st('パンドラボックス', false, 'engagement', 0, [blk('defend', [mod(3)], { types: [P, M] })], '陣地内：物理・魔術防御+3（交戦フェイズ終了時、または陣地破壊で消滅）。'), { territory: true }),
+    st('主の御業（デバフ無効）', false, 'engagement', 0, [blk('static', [fx('flag', { name: 'debuffImmune' })])], 'ジャンヌの宝具。この交戦フェイズ中、デバフを受けない。'),
     st('スクトゥム・アイアス', false, 'engagement', 1, [blk('defend', [mod(5, true)], { types: [P, M] })], 'かばった攻撃の防御に5までの補正値。'),
     st('魅了', true, 'rounds', 0, [blk('static', [fx('flag', { name: 'cannotAct' })])], '1巡の間、行動できない。', 1),
     st('防御低下', true, 'engagement', 0, [blk('defend', [mod(-2)])], '交戦フェイズ終了まで防御判定に-2。'),
@@ -130,7 +131,7 @@
     taimaryoku('A'),
     sk('直感', 'A', 'skill', 4, [hpUp(15), blk('defend', [mod(3)], { types: [P] })]),
     charisma('B'),
-    sk('約束された勝利の剣', 'A++', 'np', 0, [blk('attack', [mod(10, true)], { types: [P, M] })], { res: np() }),
+    sk('約束された勝利の剣', 'A++', 'np', 0, [blk('attack', [mod(10, true), fx('territoryBreak')], { types: [P, M] })], { res: np(), note: '陣地破壊が発生する。' }),
   ]));
 
   C.push(ch('アルトリア〔オルタ〕', 'セイバー', ['A', 'A', 'D', 'A++', 'C'], ['秩序・悪', '人属性', '竜種'], [
@@ -138,16 +139,16 @@
     sk('魔力放出', 'A', 'skill', 3, [blk('attack', [mod(5)], { types: [M] })]),
     sk('直感', 'B', 'skill', 4, [hpUp(10), blk('attack', [mod(4)], { types: [M] })]),
     sk('約束された勝利の剣（モルガン）', 'A++', 'np', 0, [
-      blk('attack', [fx('aoe'), mod(5, true)], { types: [M] }),
+      blk('attack', [fx('aoe'), mod(5, true), fx('territoryBreak')], { types: [M] }),
       blk('attack', [mod(3, true)], { types: [M], cond: ['target.hp > self.hp'] }),
-    ], { res: np() }),
+    ], { res: np(), note: '陣地破壊が発生する。' }),
   ]));
 
   C.push(ch('エミヤ', 'アーチャー', ['D', 'B', 'B', 'B', 'E'], ['中立・中庸', '人属性'], [
     tandoku('D'),
     sk('投影魔術', 'A', 'skill', 5, [hpUp(15), blk('attack', [mod(4)], { types: [M] })]),
     sk('心眼(真)', 'B', 'skill', 5, [blk('defend', [mod(2)], { types: [P, M] }), blk('initiative', [mod(3)])]),
-    sk('無限の剣製', 'E～A++', 'np', 0, [blk('turnStart', [fx('applyState', { state: '無限の剣製', to: 'self' })])], { res: np(), note: '手番開始時に固有結界を展開（自分のみに効果）。陣地破壊は対象外。' }),
+    sk('無限の剣製', 'E～A++', 'np', 0, [blk('turnStart', [fx('territoryBreak'), fx('applyState', { state: '無限の剣製', to: 'self' })], { cond: ["!hasState(self,'無限の剣製')"] })], { res: np(), note: '自分の手番開始時に固有結界（陣地）を展開。発動時に陣地破壊が発生。陣地内では自分の物理・魔術攻撃に5までの補正値。交戦フェイズ終了時、または相手の陣地破壊で消滅。' }),
   ]));
 
   C.push(ch('アタランテ', 'アーチャー', ['D', 'E', 'A', 'B', 'C'], ['中立・悪', '地属性'], [
@@ -172,7 +173,7 @@
   ]));
 
   C.push(ch('メドゥーサ', 'ライダー', ['B', 'D', 'A', 'B', 'E'], ['混沌・善', '地属性'], [
-    sk('騎乗', 'A+', 'class', 10, [blk('turnStart', [fx('summon', { char: 'ペガサス', value: '1', pos: 'front', life: 'battle', link: false })])], { uses: once('battle'), note: '「任意のタイミング」で召喚できるため、AIは自陣営の最初の手番開始時に召喚する（先手を取られても出した直後に攻撃できる）。1戦闘1回。' }),
+    sk('騎乗', 'A+', 'class', 10, [blk('turnStart', [fx('summon', { char: 'ペガサス', value: '1', pos: 'front', life: 'battle', link: true })])], { uses: once('battle'), note: '「任意のタイミング」で召喚できるため、AIは自陣営の最初の手番開始時に召喚する（先手を取られても出した直後に攻撃できる）。1戦闘1回。' }),
     sk('怪力', 'B', 'skill', 5, [hpUp(15), blk('attack', [mod(4)], { types: [P] })]),
     sk('魔眼', 'A+', 'skill', 4, [blk('initiative', [mod(3)]), blk('defend', [mod(3)], { types: [P] })]),
     sk('騎英の手綱', 'A+', 'np', 0, [blk('allyAttack', [mod(10, true)], { types: [P], cond: ["has(actor,'ペガサス')"] })], { res: np(), note: '同じ陣営のペガサスの物理攻撃時に補正値を与える。' }),
@@ -181,10 +182,10 @@
   C.push(ch('ペガサス', '乗騎', ['EX', 'E', 'A', 'C', 'E'], ['乗騎', '幻想種', 'ペガサス'], [], { resources: [] }));
 
   C.push(ch('イスカンダル', 'ライダー', ['B', 'A', 'E', 'C', 'A+'], ['中立・善', '人属性', '神性'], [
-    sk('騎乗', 'A+', 'class', 10, [blk('turnStart', [fx('summon', { char: '神威の車輪', value: '1', pos: 'front', life: 'battle', link: false })])], { uses: once('battle'), note: '自陣営の最初の手番開始時に乗騎「神威の車輪」を召喚（1戦闘1回）。' }),
+    sk('騎乗', 'A+', 'class', 10, [blk('turnStart', [fx('summon', { char: '神威の車輪', value: '1', pos: 'front', life: 'battle', link: true })])], { uses: once('battle'), note: '自陣営の最初の手番開始時に乗騎「神威の車輪」を召喚（1戦闘1回）。' }),
     sk('神性', 'C', 'skill', 5, [], { heroBonus: 10, note: 'キャラシート作成時、サーヴァントの英雄点10を得る（令呪コストの予算に加算）。' }),
     charisma('A'),
-    sk('王の軍勢', 'EX', 'np', 0, [blk('turnStart', [fx('summon', { char: '王の軍勢', value: 'd(3,6)', pos: 'front', life: 'engagement', link: true })])], { res: np(), note: '手番開始時に固有結界を展開し、乗騎「王の軍勢」を3D6体召喚。交戦フェイズ終了時に消滅。「総数が半分以下で消滅」と陣地破壊は未対応。' }),
+    sk('王の軍勢', 'EX', 'np', 0, [blk('turnStart', [fx('territoryBreak'), fx('summon', { char: '王の軍勢', value: 'd(3,6)', pos: 'front', life: 'engagement', link: true, collapse: true, territory: true })])], { res: np(), note: '自分の手番開始時に固有結界を展開し、乗騎「王の軍勢」を3D6体召喚。発動時に陣地破壊が発生。陣地（と軍勢）は交戦フェイズ終了時、軍勢の総数が半分以下になった時、イスカンダルが倒れた時、相手の陣地破壊で消滅。' }),
   ]));
   C.push(ch('神威の車輪', '乗騎', ['EX', 'A', 'C', 'E', 'E'], ['乗騎'], [], { resources: [] }));
   C.push(ch('王の軍勢', '乗騎', ['E', 'E', 'E', 'E', 'E'], ['乗騎'], [], { resources: [] }));
@@ -231,14 +232,14 @@
     sk('勇猛', 'B', 'skill', 5, [blk('attack', [faces(1), fx('noNegFaces')], { types: [P] })]),
     sk('軍神五兵（1）対人', 'A', 'np', 0, [blk('attack', [mod(10, true)], { types: [P] })], { res: np() }),
     sk('軍神五兵（2）対軍', 'A', 'np', 0, [blk('attack', [fx('aoe'), mod(5, true)], { types: [P] })], { res: np(), ai: { policy: 'never', threshold: 50 }, note: '3つの効果は宝具回数を共有。AIは上から順に使用判定する。' }),
-    sk('軍神五兵（3）対城', 'A', 'np', 0, [blk('attack', [mod(5, true), fx('negateOpp', { names: '', kinds: 'skill' })], { types: [P] })], { res: np(), ai: { policy: 'never', threshold: 50 } }),
+    sk('軍神五兵（3）対城', 'A', 'np', 0, [blk('attack', [mod(5, true), fx('negateOpp', { names: '', kinds: 'skill' }), fx('territoryBreak')], { types: [P] })], { res: np(), ai: { policy: 'never', threshold: 50 } }),
   ]));
 
   C.push(ch('ジャンヌ・ダルク', 'ルーラー', ['B', 'B', 'A', 'A', 'C'], ['秩序・善', '星属性', '聖人'], [
     sk('神明裁決', 'A', 'class', 5, [], { note: '令呪効果は対象外。' }),
     taimaryoku('EX'),
     sk('啓示', 'A', 'skill', 4, [hpUp(15), blk('initiative', [mod(3)])]),
-    sk('我が神はここにありて', 'A', 'np', 0, [blk('allyDefend', [mod(5, true), fx('heal', { value: 'd(5,6)', to: 'alliesFront' }), fx('applyState', { state: '行動不能', to: 'self' })], { types: ALL })], { res: np(), ai: { policy: 'finisher', threshold: 40 }, note: 'デバフ無効化は対象外。防御側の被害が大きい時に使用。' }),
+    sk('我が神はここにありて', 'A', 'np', 0, [blk('allyDefend', [mod(5, true), fx('heal', { value: 'd(5,6)', to: 'alliesFront' }), fx('clearDebuffs', { to: 'allies' }), fx('applyState', { state: '主の御業（デバフ無効）', to: 'allies' }), fx('applyState', { state: '行動不能', to: 'self' })], { types: ALL })], { res: np(), ai: { policy: 'finisher', threshold: 40 }, note: '味方の防御に5までの補正値、ダメージ後に味方前衛を5D6回復、この交戦フェイズ中は味方陣営へのデバフを無効（掛かっているデバフも解除）。自分は次の1巡行動不能（これは無効化されない）。防御側の被害が大きい時に使用。' }),
   ]));
 
   C.push(ch('天草四郎時貞', 'ルーラー', ['B', 'C', 'B', 'A', 'B'], ['秩序・善', '人属性'], [
@@ -307,7 +308,7 @@
     sk('バビロンの蔵', 'EX', 'skill', 3, [hpUp(15), blk('attack', [mod(2)], { types: [P] })]),
     sk('神性', 'B', 'skill', 5, [], { heroBonus: 10, note: 'キャラシート作成時、サーヴァントの英雄点10を得る（令呪コストの予算に加算）。' }),
     sk('王の財宝', 'E～A++', 'np', 5, [blk(['attack', 'defend'], [mod(5, true)])], { res: np(), ai: { policy: 'finisher', threshold: 60 }, note: '任意の判定に5までの補正値（英雄点5点）。宝具2と同じ判定には使えない。AIは決定打・致命傷の防御で使う。' }),
-    sk('天地乖離す開闢の剣', 'EX', 'np', 0, [blk('attack', [fx('aoe'), mod(10, true)], { types: [P] })], { res: np('np2'), csUse: 1, note: 'エヌマ・エリシュ。令呪を1画消費して発動。相手の前衛全てに物理攻撃、10までの補正値。陣地破壊は対象外。' }),
+    sk('天地乖離す開闢の剣', 'EX', 'np', 0, [blk('attack', [fx('aoe'), mod(10, true), fx('territoryBreak')], { types: [P] })], { res: np('np2'), csUse: 1, note: 'エヌマ・エリシュ。令呪を1画消費して発動。陣地破壊が発生。相手の前衛全てに物理攻撃、10までの補正値。' }),
   ], { resources: [{ key: 'np', name: '宝具1', max: 1 }, { key: 'np2', name: '宝具2', max: 1 }] }));
 
   C.push(ch('エルキドゥ', 'ランサー', ['A', 'EX', 'A', 'A', 'A'], ['中立・中庸', '天属性'], [
@@ -373,7 +374,7 @@
   C.push(ma('TYPE〔SHAMAN〕', ['E', 'C', 'E', 'B', 'E'], ['男性'], [
     mIllusion(),
     sk('SKILL〔DOT〕', '', 'skill', 0, [blk('action', [fx('damage', { value: '5', to: 'enemyLowest' })])], { note: '前衛時、攻撃の代わりに相手前衛1体へ5ダメージ（AIは毎手番使用）。' }),
-    sk('リギ・マガツノリト', '', 'np', 0, [], { res: ou(), note: '陣地破壊（交戦シミュレーション対象外）。' }),
+    sk('リギ・マガツノリト', '', 'np', 0, [blk('action', [fx('territoryBreak')], { cond: ['self.front', 'enemyTerritory()'] })], { res: ou(), note: '前衛にいる時、行動の代わりに陣地破壊。AIは相手に陣地がある時だけ使う。' }),
   ]));
   C.push(ma('TYPE〔REGALIA〕', ['C', 'D', 'E', 'C', 'E'], ['女性'], [
     sk('SKILL〔CIRCLE〕', '', 'skill', 0, [blk('allyAttack', [mod(3)], { types: [P, M], cond: sv.concat(["teamFlag('陣地')"]) })], { note: '陣地内（陣営フラグ「陣地」）で自分のサーヴァントの物理・魔術攻撃+3。' }),
@@ -403,7 +404,7 @@
   C.push(ma('TYPE〔MONOLITH〕', ['D', 'B', 'E', 'D', 'E'], ['無性'], [
     sk('SKILL〔SMOKE〕', '', 'skill', 0, [], { heroBonus: -5, note: 'マスターの英雄点を5点減らす。遠距離攻撃フェイズのダメージ0は対象外。' }),
     sk('STYLE〔DETEKT〕', '', 'skill', 0, [], { heroBonus: 5, note: '英雄点5を得る。真名看破（対象外）。' }),
-    sk('プリフェクチャー・サンクチュアリ', '', 'np', 0, [], { res: ou(), note: '陣地破壊無効（対象外）。' }),
+    sk('プリフェクチャー・サンクチュアリ', '', 'np', 0, [blk('static', [fx('flag', { name: 'territoryGuard' })], { cond: ['self.front'] })], { res: ou(), note: '前衛にいる間、自陣営への陣地破壊を無効にする。' }),
   ]));
   C.push(ma('TYPE〔OMNIVORE〕', ['EX', 'D', 'E', 'E', 'E'], ['無性'], [
     mPowered(),
@@ -481,7 +482,7 @@
     sk('誕生の時きたれり、其は全てを修めるもの', 'A+++', 'np', 0, [
       blk('attack', [fx('aoe'), mod(10, true), fx('applyState', { state: '人理焼却', to: 'target', if: 'event.damage > 0' })], { types: [M] }),
     ], { res: np(), note: 'アルス・アルマデル・サロモニス。光帯による全体魔術攻撃。ダメージを与えた相手に「人理焼却」（攻防-2）。' }),
-  ], { hpExtra: 95, actions: 1, ai: { target: 'smart', tag: '' }, note: 'FGO第1部終章の魔神王ゲーティアを元にした試作ボス。本体は1手番1回行動、魔神柱が手数を補う。PC4騎（アルトリア・マシュ・エミヤ・メディア）（令呪あり）で勝率約40%になるようHP補正+95（HP120）に調整。パラメータは型月設定（筋A・耐A・敏D・魔A+・幸B）。HP補正で難易度を調整。' }));
+  ], { hpExtra: 200, actions: 3, ai: { target: 'smart', tag: '' }, note: 'FGO第1部終章の魔神王ゲーティアを元にした試作ボス。1手番3回行動＋魔神柱。PC4騎（アルトリア・マシュ・エミヤ・メディア、令呪・援護あり）で勝率約45%になるようHP補正+200（HP225）に調整。パラメータは型月設定（筋A・耐A・敏D・魔A+・幸B）。HP補正で難易度を調整。' }));
 
   C.push(ch('殺生院キアラ（ビーストⅢ／R）', 'ビーストⅢ／R', ['C', 'EX', 'B', 'EX', 'A'], ['ボス', 'ビースト', '魔性', '女性'], [
     sk('獣の権能', 'A', 'class', 0, [blk('attack', [mod(5)], { types: [P, M], cond: ["has(target,'人属性')"] })], { note: '対人類特攻。' }),
@@ -494,7 +495,7 @@
     sk('快楽天・胎蔵曼荼羅', 'EX', 'np', 0, [
       blk('attack', [fx('aoe'), mod(10, true), fx('negateOpp', { names: '', kinds: 'class,skill,state' }), fx('heal', { value: 'd(5,6)', to: 'self' })], { types: [M] }),
     ], { res: np(), note: 'アミダアミデュラ・ヘブンズホール。防御力無視の全体魔術攻撃（相手の防御補正は宝具のみ有効）。使用後HPを5D6回復。' }),
-  ], { hpExtra: 70, actions: 1, ai: { target: 'smart', tag: '' }, note: 'FGO・CCCコラボのビーストⅢ／Rを元にした試作ボス。PC4騎（アルトリア・ジャンヌ・クー・フーリン・玉藻）（令呪あり）で勝率約40%になるようHP補正+70（HP110）に調整。パラメータは型月設定（筋C・耐EX・敏B・魔EX・幸A）。EXが2つあるため交戦ごとに2回振り直せる。' }));
+  ], { hpExtra: 140, actions: 3, ai: { target: 'smart', tag: '' }, note: 'FGO・CCCコラボのビーストⅢ／Rを元にした試作ボス。1手番3回行動。PC4騎（アルトリア・ジャンヌ・クー・フーリン・玉藻、令呪・援護あり）で勝率約45%になるようHP補正+140（HP180）に調整。パラメータは型月設定（筋C・耐EX・敏B・魔EX・幸A）。EXが2つあるため交戦ごとに2回振り直せる。' }));
 
   // キャラシート記載の英雄点と令呪消費（自動計算の検算用）
   const SHEET = {
@@ -517,24 +518,24 @@
     {
       id: id('sc'), name: 'アルトリア vs アルトリア〔オルタ〕（1対1）',
       teams: [
-        { name: 'セイバー陣営', flags: '', support: false, members: [mem('アルトリア・ペンドラゴン')] },
-        { name: 'オルタ陣営', flags: '', support: false, members: [mem('アルトリア〔オルタ〕')] },
+        { name: 'セイバー陣営', flags: '', support: true, members: [mem('アルトリア・ペンドラゴン')] },
+        { name: 'オルタ陣営', flags: '', support: true, members: [mem('アルトリア〔オルタ〕')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 5000, seed: 20261007, logTrials: 3,
     },
     {
       id: id('sc'), name: '消耗戦：HP半分・宝具使用済みのセイバー vs 万全のオルタ',
       teams: [
-        { name: 'セイバー陣営', flags: '', support: false, members: [mem('アルトリア・ペンドラゴン', 'front', { init: { hpMode: 'pct', hp: 50, res: { np: 0 }, states: [], used: [] } })] },
-        { name: 'オルタ陣営', flags: '', support: false, members: [mem('アルトリア〔オルタ〕')] },
+        { name: 'セイバー陣営', flags: '', support: true, members: [mem('アルトリア・ペンドラゴン', 'front', { init: { hpMode: 'pct', hp: 50, res: { np: 0 }, states: [], used: [] } })] },
+        { name: 'オルタ陣営', flags: '', support: true, members: [mem('アルトリア〔オルタ〕')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 5000, seed: 20261007, logTrials: 2,
     },
     {
       id: id('sc'), name: 'マスター付き：エミヤ＆TEENS vs クー・フーリン＆SCRAP',
       teams: [
-        { name: 'アーチャー陣営', flags: '', support: false, members: [mem('エミヤ', 'front', { master: 1 }), mem('TYPE〔TEENS〕', 'back')] },
-        { name: 'ランサー陣営', flags: '', support: false, members: [mem('クー・フーリン', 'front', { master: 1 }), mem('TYPE〔SCRAP〕', 'back')] },
+        { name: 'アーチャー陣営', flags: '', support: true, members: [mem('エミヤ', 'front', { master: 1 }), mem('TYPE〔TEENS〕', 'back')] },
+        { name: 'ランサー陣営', flags: '', support: true, members: [mem('クー・フーリン', 'front', { master: 1 }), mem('TYPE〔SCRAP〕', 'back')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 5000, seed: 3, logTrials: 2,
     },
@@ -544,7 +545,7 @@
         { name: 'PC陣営', flags: '', support: true, members: [
           mem('アルトリア・ペンドラゴン'), mem('マシュ・キリエライト'), mem('エミヤ'), mem('メディア'),
         ] },
-        { name: 'ビーストⅠ', flags: '', support: false, csMode: 'none', members: [mem('魔神王ゲーティア', 'front', { key: true })] },
+        { name: 'ビーストⅠ', flags: '', support: true, csMode: 'none', members: [mem('魔神王ゲーティア', 'front', { key: true })] },
       ],
       rounds: { mode: 'fixed', value: 4 }, maxEngagements: 6, trials: 2000, seed: 1, logTrials: 2,
     },
@@ -554,53 +555,61 @@
         { name: 'PC陣営', flags: '', support: true, members: [
           mem('アルトリア・ペンドラゴン'), mem('ジャンヌ・ダルク'), mem('クー・フーリン'), mem('玉藻の前'),
         ] },
-        { name: 'ビーストⅢ／R', flags: '', support: false, csMode: 'none', members: [mem('殺生院キアラ（ビーストⅢ／R）', 'front', { key: true })] },
+        { name: 'ビーストⅢ／R', flags: '', support: true, csMode: 'none', members: [mem('殺生院キアラ（ビーストⅢ／R）', 'front', { key: true })] },
       ],
       rounds: { mode: 'fixed', value: 4 }, maxEngagements: 6, trials: 2000, seed: 1, logTrials: 2,
     },
     {
       id: id('sc'), name: 'ギルガメッシュ vs エルキドゥ',
       teams: [
-        { name: '英雄王陣営', flags: '', support: false, members: [mem('ギルガメッシュ')] },
-        { name: '天の鎖陣営', flags: '', support: false, members: [mem('エルキドゥ')] },
+        { name: '英雄王陣営', flags: '', support: true, members: [mem('ギルガメッシュ')] },
+        { name: '天の鎖陣営', flags: '', support: true, members: [mem('エルキドゥ')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 3000, seed: 2026, logTrials: 3,
     },
     {
       id: id('sc'), name: 'マスターで変わる初期令呪：エルキドゥ＆MONONOFU vs ギルガメッシュ＆TEENS',
       teams: [
-        { name: '天の鎖陣営', flags: '', support: false, members: [mem('エルキドゥ', 'front', { master: 1 }), mem('TYPE〔MONONOFU〕', 'back')] },
-        { name: '英雄王陣営', flags: '', support: false, members: [mem('ギルガメッシュ', 'front', { master: 1 }), mem('TYPE〔TEENS〕', 'back')] },
+        { name: '天の鎖陣営', flags: '', support: true, members: [mem('エルキドゥ', 'front', { master: 1 }), mem('TYPE〔MONONOFU〕', 'back')] },
+        { name: '英雄王陣営', flags: '', support: true, members: [mem('ギルガメッシュ', 'front', { master: 1 }), mem('TYPE〔TEENS〕', 'back')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 3000, seed: 2026, logTrials: 2,
     },
     {
+      id: id('sc'), name: '陣地あり：メディア（陣地作成） vs アルトリア（陣地破壊）',
+      teams: [
+        { name: 'キャスター陣営', flags: '陣地', support: true, members: [mem('メディア')] },
+        { name: 'セイバー陣営', flags: '', support: true, members: [mem('アルトリア・ペンドラゴン')] },
+      ],
+      rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 3000, seed: 5, logTrials: 2,
+    },
+    {
       id: id('sc'), name: 'ヘラクレス vs スパルタクス',
       teams: [
-        { name: 'ヘラクレス陣営', flags: '', support: false, members: [mem('ヘラクレス')] },
-        { name: 'スパルタクス陣営', flags: '', support: false, members: [mem('スパルタクス')] },
+        { name: 'ヘラクレス陣営', flags: '', support: true, members: [mem('ヘラクレス')] },
+        { name: 'スパルタクス陣営', flags: '', support: true, members: [mem('スパルタクス')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 3000, seed: 12, logTrials: 3,
     },
     {
       id: id('sc'), name: 'メドゥーサ（ペガサス召喚） vs 呂布',
       teams: [
-        { name: 'ライダー陣営', flags: '', support: false, members: [mem('メドゥーサ', 'front', { key: true })] },
-        { name: 'バーサーカー陣営', flags: '', support: false, members: [mem('呂布奉先')] },
+        { name: 'ライダー陣営', flags: '', support: true, members: [mem('メドゥーサ')] },
+        { name: 'バーサーカー陣営', flags: '', support: true, members: [mem('呂布奉先')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 5000, seed: 7, logTrials: 2,
     },
     {
       id: id('sc'), name: 'イスカンダル（王の軍勢） vs スパルタクス',
       teams: [
-        { name: '征服王陣営', flags: '', support: true, members: [mem('イスカンダル', 'front', { key: true })] },
-        { name: 'スパルタクス陣営', flags: '', support: false, members: [mem('スパルタクス')] },
+        { name: '征服王陣営', flags: '', support: true, members: [mem('イスカンダル')] },
+        { name: 'スパルタクス陣営', flags: '', support: true, members: [mem('スパルタクス')] },
       ],
       rounds: { mode: 'pl', value: 2 }, maxEngagements: 10, trials: 1000, seed: 11, logTrials: 2,
     },
   ];
 
-  const presets = { rules, states, characters: C, scenarios, version: 5, removedNames: ['【サンプル】災厄の黒竜'], removedScenarios: ['PC4騎 vs サンプルボス', 'ライダー＋ペガサス vs バーサーカー'] };
+  const presets = { rules, states, characters: C, scenarios, version: 9, removedNames: ['【サンプル】災厄の黒竜'], removedScenarios: ['PC4騎 vs サンプルボス', 'ライダー＋ペガサス vs バーサーカー'] };
   if (typeof module !== 'undefined' && module.exports) module.exports = presets;
   else root.TRPGPresets = presets;
 })(typeof self !== 'undefined' ? self : this);

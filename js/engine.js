@@ -11,8 +11,8 @@
   // ------------------------------------------------------------------
   const TIMINGS = [
     ['static', '常時（ステータス・フラグ）'],
-    ['battleStart', '戦闘開始時（キャラシート作成時）'],
-    ['movePhase', '交戦の合間（移動フェイズ相当）'],
+    ['battleStart', 'セッション開始時（キャラシート作成時）'],
+    ['movePhase', '次のターンの移動フェイズ'],
     ['engagementStart', '交戦フェイズ開始時'],
     ['initiative', '先手判定時（自分）'],
     ['allyInitiative', '味方（自分以外）の先手判定時'],
@@ -55,7 +55,8 @@
     resource: { label: 'リソース増減', params: ['key', 'value', 'to', 'if'], phase: 'other' },
     statSteal: { label: 'レベルドレイン（能力値を奪う）', params: ['value', 'if'], phase: 'other' },
     clearBuffs: { label: 'バフ（有利な状態）解除', params: ['to', 'if'], phase: 'other' },
-    summon: { label: '召喚（乗騎・使い魔など）', params: ['char', 'value', 'pos', 'life', 'link', 'if'], phase: 'other' },
+    summon: { label: '召喚（乗騎・使い魔など）', params: ['char', 'value', 'pos', 'life', 'link', 'collapse', 'territory', 'if'], phase: 'other' },
+    territoryBreak: { label: '陣地破壊', params: ['if'], phase: 'other' },
     flag: { label: 'フラグ（常時）', params: ['name'], phase: 'static' },
     negateIncoming: { label: '受ける攻撃のスキル補正を無効（常時）', params: ['names', 'kinds'], phase: 'static' },
     kill: { label: '自分が消滅する', params: ['if'], phase: 'other' },
@@ -83,7 +84,8 @@
     ['debuffImmune', 'デバフを受けない'],
     ['cannotAct', '行動できない'],
     ['fullDamage', 'マスターでもサーヴァントに通常ダメージ'],
-    ['independent', '単独行動（マスター喪失後も次の交戦終了まで残る）'],
+    ['independent', '単独行動（マスター喪失後も次のターンの交戦フェイズ終了まで残る）'],
+    ['territoryGuard', '陣地破壊を無効（前衛にいる時）'],
   ];
 
   const AI_POLICIES = [
@@ -281,6 +283,8 @@
         return B.orderRank[S.self._u.team] < B.orderRank[t._u.team];
       },
       allyDown: () => (S.self ? B.teams[S.self._u.team].units.filter((x) => !x.alive && !x.vanished).length : 0),
+      hasState: (u, name) => !!(u && u._u.insts.some((i) => i.isState && i.def.name === name)),
+      enemyTerritory: () => !!(S.self && B.teams.some((t) => t.idx !== S.self._u.team && !t.out && hasTerritory(B, t))),
       isServant: (u) => !!(u && S.self && u._u.masterId === S.self._u.id),
       isMaster: (u) => !!(u && S.self && S.self._u.masterId === u._u.id),
       allyCount: (tag) => (S.self ? B.teams[S.self._u.team].units.filter((x) => x.alive && (!tag || x.tags.has(tag))).length : 0),
@@ -530,7 +534,13 @@
     cands.sort((x, y) => (isLimited(x.inst) ? 1 : 0) - (isLimited(y.inst) ? 1 : 0) || y.w - x.w);
 
     const chosen = [];
+    // 同じ攻撃の別の防御者で既に発動した「味方全員の防御」系（我が神はここにありて等）は、消費せずに効果だけ適用
+    if (ctx.shared) for (const sh of ctx.shared) {
+      const bl = matchBlocks(B, sh.inst, 'allyDefend', ctx, roller);
+      if (bl.length && sh.owner.alive) chosen.push({ inst: sh.inst, owner: sh.owner, blocks: bl, sharedReuse: true });
+    }
     for (const c of cands) {
+      if (ctx.shared && ctx.shared.some((sh) => sh.inst === c.inst)) continue;
       if (!canUse(c.inst)) continue;
       if (c.inst.def.kind === 'np' && !c.inst.isState && chosen.some((x) => x.owner === c.owner && x.inst.def.kind === 'np' && !x.inst.isState)) continue;
       if (isLimited(c.inst)) {
@@ -547,6 +557,7 @@
       }
       chosen.push(c);
       if (!ctx.dry && (isLimited(c.inst) || c.inst.charges !== null)) consume(B, c.inst);
+      if (!ctx.dry && ctx.shared && isLimited(c.inst) && c.blocks.some((b) => (b.timings || []).includes('allyDefend'))) { ctx.shared.push({ inst: c.inst, owner: c.owner }); c.sharedFirst = true; }
     }
 
     // 強化無効などの自己抑制
@@ -563,7 +574,9 @@
       let contributed = false;
       for (const b of c.blocks) for (const e of b.effects || []) {
         if (!ROLL_PHASE.has(e.type)) {
-          if (EFFECT_TYPES[e.type] && EFFECT_TYPES[e.type].phase === 'other') P.post.push({ inst: c.inst, owner: c.owner, eff: e });
+          if (e.type === 'territoryBreak') { if (!ctx.dry) P.territoryBreak = c.owner; continue; }
+          if (c.sharedReuse) continue;
+          if (EFFECT_TYPES[e.type] && EFFECT_TYPES[e.type].phase === 'other') P.post.push({ inst: c.inst, owner: c.owner, eff: e, deferred: !!c.sharedFirst });
           continue;
         }
         const sc = { self: c.owner, actor: roller, target: ctx.opp };
@@ -752,8 +765,16 @@
       const h = csHolder(B, u);
       if (!h) continue;
       if (!enemiesFront(B, u).length) continue;
-      const pct = u.hp / u.maxHp;
-      if (pct <= 0.35 && u.maxHp - u.hp >= 20 && csAllow(B, u, h, 1, pct <= 0.2)) {
+      // 自分の次の手番までに受けうるダメージ（敵の前衛全員が自分を狙った場合、行動回数も考慮）で倒れうるなら回復する
+      let risk = 0;
+      for (const e of enemiesFront(B, u)) {
+        let best = 0;
+        for (const ty of availableTypes(B, e)) { const q = quickDamage(B, e, ty.key, u); best = Math.max(best, Math.max(0, q.mu) + q.sd); }
+        risk += best * Math.max(1, e.actions || 1);
+      }
+      const missing = u.maxHp - u.hp;
+      const danger = u.hp <= risk;
+      if (danger && missing >= 15 && csAllow(B, u, h, 1, u.hp <= risk * 0.6)) {
         csSpend(B, h, 1, 'HP30回復', u);
         const before = u.hp; u.hp = Math.min(u.maxHp, u.hp + 30); u.healed += u.hp - before;
         continue;
@@ -811,10 +832,10 @@
     return B.rules.attackTypes.filter((t) => !t.requiresFlag || hasFlag(B, u, t.requiresFlag));
   }
 
-  function chooseAttack(B, u, extra) {
+  function chooseAttack(B, u, extra, onlyType) {
     const foes = enemiesFront(B, u);
     if (!foes.length) return null;
-    const types = availableTypes(B, u);
+    const types = availableTypes(B, u).filter((t) => !onlyType || t.key === onlyType);
     if (!types.length) return null;
     const pol = u.ai.target || 'smart';
     let pool = foes;
@@ -928,21 +949,25 @@
           break;
         }
         case 'applyState': applyState(B, owner, u, eff.state); break;
+        case 'territoryBreak': {
+          if (u === owner) territoryBreak(B, owner);
+          break;
+        }
         case 'reshape': {
           if (u !== owner || !u.alive) break;
           reshapeUnit(B, u, eff.profiles);
           break;
         }
         case 'clearBuffs': {
-          const n = u.insts.length;
+          const gone = u.insts.filter((i) => i.isState && !i.def.debuff).map((i) => i.def.name);
           u.insts = u.insts.filter((i) => !(i.isState && !i.def.debuff));
-          if (u.insts.length !== n) log(B, `　${u.name} のバフ解除`);
+          if (gone.length) log(B, `　${u.name} のバフ解除（${gone.join('・')}）`);
           break;
         }
         case 'clearDebuffs': {
-          const n = u.insts.length;
+          const gone = u.insts.filter((i) => i.isState && i.def.debuff).map((i) => i.def.name);
           u.insts = u.insts.filter((i) => !(i.isState && i.def.debuff));
-          if (u.insts.length !== n) log(B, `　${u.name} のデバフ解除`);
+          if (gone.length) log(B, `　${u.name} のデバフ解除（${gone.join('・')}）`);
           break;
         }
         case 'resource': {
@@ -969,6 +994,7 @@
             u.maxHp = Math.max(1, u.maxHp - per); u.hp = Math.min(u.hp, u.maxHp);
             owner.maxHp += per; owner.hp += per;
           }
+          (B.stealLog = B.stealLog || []).push({ thief: owner, victim: u, key: bestK, hp: !!(B.rules.hpStat && bestK === B.rules.hpStat) });
           log(B, `　${owner.name} が ${u.name} の ${statName(B, bestK)} を奪った`);
           break;
         }
@@ -1107,6 +1133,21 @@
     if (src) src.kills++;
     log(B, `　✖ ${u.name} 脱落${why ? '（' + why + '）' : ''}`);
     const team = B.teams[u.team];
+    if (u.group) checkCollapse(B, u);
+    // レベルドレインなど、脱落した者が付与した状態異常は解除（奪った能力値は相手に戻る）
+    if (B.stealLog && B.stealLog.some((x) => x.thief === u)) {
+      for (const x of B.stealLog.filter((y) => y.thief === u)) {
+        x.victim.statDelta[x.key] = (x.victim.statDelta[x.key] || 0) + 1;
+        if (x.hp) x.victim.maxHp += +B.rules.hpPerStat || 5;
+      }
+      B.stealLog = B.stealLog.filter((y) => y.thief !== u);
+      log(B, `　${u.name} の脱落により、付与していた状態異常（レベルドレイン）が解除`);
+    }
+    for (const t of B.teams) for (const x of t.units) {
+      const before = x.insts.length;
+      x.insts = x.insts.filter((i) => !(i.isState && i.def.debuff && i.def.removeOnSourceDeath && i.source === u));
+      if (x.insts.length !== before) log(B, `　${x.name} の状態異常が解除（付与者の脱落）`);
+    }
     if (u.key) { team.out = true; log(B, `　陣営「${team.name}」の要が倒れた`); }
     // 親が倒れたら子も消滅
     for (const x of team.units) if (x.alive && x.parentId && x.parentId === u.id) vanish(B, x, '召喚者の脱落');
@@ -1119,11 +1160,52 @@
         dealDamage(B, null, sv, loss, {});
         if (sv.alive) {
           sv.fadeAt = B.engagement + (hasFlag(B, sv, 'independent') ? 1 : 0);
-          log(B, `　${sv.name} は${sv.fadeAt > B.engagement ? '次の交戦フェイズ' : 'この交戦フェイズ'}の終了時に消滅する`);
+          log(B, `　${sv.name} は${sv.fadeAt > B.engagement ? '次のターン' : 'このターン'}の終了時（交戦フェイズ終了時）に消滅する`);
         }
       }
     }
     ensureFront(B, team);
+  }
+
+  /** 群体の召喚（王の軍勢など）：生き残りが召喚数の半分以下になったら全て消滅 */
+  function checkCollapse(B, u) {
+    const g = u.group;
+    if (!g || g.done || !g.collapse) return;
+    const alive = B.teams[u.team].units.filter((x) => x.alive && x.group === g);
+    if (alive.length * 2 > g.total) return;
+    g.done = true;
+    if (alive.length) log(B, `　${g.name}が召喚数${g.total}の半分以下（残り${alive.length}）になり、陣地ごと消滅`);
+    for (const x of alive) { x.alive = false; x.hp = 0; x.vanished = true; }
+    ensureFront(B, B.teams[u.team]);
+  }
+
+  /** 陣地破壊：相手陣営の陣地（陣営フラグ「陣地」、陣地扱いの状態、固有結界の召喚体）を消す */
+  function hasTerritory(B, team) {
+    if ([...team.flags].some((f) => f.startsWith('陣地'))) return true;
+    for (const u of team.units) {
+      if (!u.alive) continue;
+      if (u.insts.some((i) => i.isState && i.def.territory)) return true;
+      if (u.group && u.group.territory && !u.group.done) return true;
+    }
+    return false;
+  }
+  function territoryBreak(B, owner) {
+    let any = false;
+    for (const t of B.teams) {
+      if (t.idx === owner.team || t.out || !hasTerritory(B, t)) continue;
+      const guard = t.units.find((u) => u.alive && u.pos === 'front' && hasFlag(B, u, 'territoryGuard'));
+      if (guard) { log(B, `　陣地破壊は ${guard.name} によって無効化された`); continue; }
+      any = true;
+      for (const f of [...t.flags]) if (f.startsWith('陣地')) t.flags.delete(f);
+      for (const u of t.units) {
+        u.insts = u.insts.filter((i) => !(i.isState && i.def.territory));
+        if (u.alive && u.group && u.group.territory && !u.group.done) { u.alive = false; u.hp = 0; u.vanished = true; }
+      }
+      for (const u of t.units) if (u.group && u.group.territory) u.group.done = true;
+      log(B, `　陣地破壊：陣営「${t.name}」の陣地が消滅`);
+      ensureFront(B, t);
+    }
+    return any;
   }
 
   function vanish(B, x, why) {
@@ -1200,6 +1282,12 @@
     return neg;
   }
 
+  function summarizeSupport(list) {
+    const m = new Map();
+    for (const x of list) { const k = x.unit.name; const e = m.get(k) || { n: 0, v: 0 }; e.n++; e.v += x.value; m.set(k, e); }
+    return [...m.entries()].map(([k, e]) => (e.n > 1 ? `${k}×${e.n} +${e.v}` : `${k} +${e.v}`)).join('、');
+  }
+
   function supportBonus(B, s, typeKey, opp, dry) {
     const T = attackTypeDef(B, typeKey);
     const P = prepareRoll(B, s, 'support', { type: typeKey, opp, dry });
@@ -1209,16 +1297,17 @@
 
   function performAttack(B, attacker, typeKey, target, support) {
     const T = attackTypeDef(B, typeKey);
-    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, extra: support ? support.value : 0, negate: incomingNegation(B, target, attacker) });
-    let targets = [];
+    // 攻撃対象の変更（カリスマ・令呪など）を先に確定し、攻撃側のスキル・条件は変更後の相手に対して評価する
+    const pre = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, extra: support ? support.value : 0, dry: true, negate: incomingNegation(B, target, attacker) });
     let redirectPost = null;
-    if (A.aoe) targets = enemiesFront(B, attacker);
-    else {
-      let t = target;
-      if (!A.noRedirect) { const r = handleRedirect(B, attacker, target, typeKey); t = r.target; redirectPost = r.post; }
-      t = csRedirect(B, attacker, typeKey, t);
-      targets = [t];
+    let finalTarget = target;
+    if (!pre.aoe) {
+      if (!pre.noRedirect) { const r = handleRedirect(B, attacker, target, typeKey); finalTarget = r.target; redirectPost = r.post; }
+      finalTarget = csRedirect(B, attacker, typeKey, finalTarget);
     }
+    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: finalTarget, extra: support ? support.value : 0, negate: incomingNegation(B, finalTarget, attacker) });
+    const targets = A.aoe ? enemiesFront(B, attacker) : [finalTarget];
+    if (A.territoryBreak) territoryBreak(B, A.territoryBreak);
     const atk = executeRoll(B, attacker, A, T.atkStat);
     // 令呪：攻撃の振り直し（積極的に使う陣営のみ）
     if (!A.aoe && targets[0] && B.teams[attacker.team].csAI === 'aggressive') {
@@ -1233,13 +1322,18 @@
     }
     attacker.attacks++;
     const tag = A.applied.length ? ' ［' + A.applied.join('・') + '］' : '';
-    const sup = support ? `（${support.unit.name} の援護 +${support.value}${support.applied && support.applied.length ? '［' + support.applied.join('・') + '］' : ''}）` : '';
+    const supList = support ? (support.list || [{ unit: support.unit, value: support.value, applied: support.applied }]) : [];
+    const sup = supList.length ? (supList.length === 1
+      ? `（${supList[0].unit.name} の援護 +${supList[0].value}${supList[0].applied && supList[0].applied.length ? '［' + supList[0].applied.join('・') + '］' : ''}）`
+      : `（援護${supList.length}体 計+${support.value}：${summarizeSupport(supList)}）`) : '';
     log(B, `${attacker.name} → ${A.aoe ? '敵前衛全員' : targets[0].name}：${T.name}攻撃 ${rollText(atk)}${sup}${tag}`);
     let total = 0;
+    const shared = [];
+    const deferred = [];
     for (const t of targets) {
       if (!t.alive) continue;
       const defStat = A.defStat || T.defStat;
-      const D = prepareRoll(B, t, 'defend', { type: typeKey, opp: attacker, negate: A.negate, atkValue: atk.value, statKey: defStat });
+      const D = prepareRoll(B, t, 'defend', { type: typeKey, opp: attacker, negate: A.negate, atkValue: atk.value, statKey: defStat, shared });
       const half = isMasterHalf(B, attacker, t);
       // 令呪（マスター用）：自分の判定に5までの補正値
       const mh = masterHolder(B, t);
@@ -1268,7 +1362,7 @@
       total += dealt;
       const ev = { damage: dealt, attackType: typeKey };
       // 防御側の判定後効果
-      for (const p of D.post) runEffect(B, p.owner, p.eff, { actor: t, target: attacker, event: ev });
+      for (const p of D.post) { if (p.deferred) deferred.push({ p, actor: t }); else runEffect(B, p.owner, p.eff, { actor: t, target: attacker, event: ev }); }
       // 攻撃対象変更スキルの後続効果
       if (redirectPost && t === targets[0]) for (const p of redirectPost) runEffect(B, p.owner, p.eff, { actor: t, target: attacker, event: ev });
       // 攻撃側の判定後効果（相手単位）
@@ -1279,8 +1373,10 @@
       }
     }
     const evAll = { damage: total, attackType: typeKey };
+    // 味方全員の防御を支える宝具の「ダメージ計算後」の効果（回復・デバフ無効など）は、全員のダメージ計算が終わってから
+    for (const d of deferred) runEffect(B, d.p.owner, d.p.eff, { actor: d.actor, target: attacker, event: evAll });
     for (const p of A.post) if (p.eff.to !== 'target') runEffect(B, p.owner, p.eff, { actor: attacker, target: targets[0], event: evAll });
-    if (support) support.unit.supports++;
+    for (const sp of supList) sp.unit.supports++;
     return total;
   }
 
@@ -1342,33 +1438,63 @@
       let bestSolo = null;
       for (const s of solos) if (s.c && (!bestSolo || s.c.score > bestSolo.c.score)) bestSolo = s;
       if (!bestSolo) break;
-      let bestPair = null;
-      if (team.support && pending.length >= 2) {
-        // 計算量を抑えるため、単独の期待値が高い上位4体の組み合わせだけを検討する
-        const top = solos.filter((x) => x.c).sort((x, y) => y.c.score - x.c.score).slice(0, 4);
-        const topUnits = top.map((x) => x.u);
-        for (const a of top) {
-          for (const s of topUnits) {
-            if (s === a.u) continue;
-            const val = supportBonus(B, s, a.c.type, a.c.target, true).value;
-            const pc = chooseAttack(B, a.u, val);
-            if (!pc) continue;
-            const soloS = solos.find((x) => x.u === s);
-            const separate = a.c.score + (soloS && soloS.c ? soloS.c.score : 0);
-            if (pc.score > separate + 0.5 && (!bestPair || pc.score - separate > bestPair.gain)) bestPair = { a: a.u, s, c: pc, val, gain: pc.score - separate };
-          }
-        }
-      }
-      if (bestPair) {
-        const sb = supportBonus(B, bestPair.s, bestPair.c.type, bestPair.c.target, false);
-        performAttack(B, bestPair.a, bestPair.c.type, bestPair.c.target, { unit: bestPair.s, value: sb.value, applied: sb.applied });
-        bestPair.a.actionsLeft--; bestPair.s.actionsLeft--;
+      let bestPlan = null;
+      if (team.support !== false && pending.length >= 2) bestPlan = planSupport(B, pending, solos);
+      if (bestPlan) {
+        const sups = bestPlan.supporters.map((sp) => {
+          const sb = supportBonus(B, sp, bestPlan.type, bestPlan.c.target, false);
+          sp.actionsLeft--;
+          return { unit: sp, value: sb.value, applied: sb.applied };
+        });
+        performAttack(B, bestPlan.a, bestPlan.c.type, bestPlan.c.target, { list: sups, value: sups.reduce((x, y) => x + y.value, 0) });
+        bestPlan.a.actionsLeft--;
       } else {
         performAttack(B, bestSolo.u, bestSolo.c.type, bestSolo.c.target, null);
         bestSolo.u.actionsLeft--;
       }
       pending = pending.filter((u) => u.actionsLeft > 0);
     }
+  }
+
+  /**
+   * 援護の計画：攻撃役1体に、複数の味方が援護を重ねる。
+   * 援護役は「援護したときの攻撃の伸び」が「その援護役が単独で攻撃した場合」を上回る間だけ1体ずつ追加する
+   * （補正値+11以上の面数ペナルティで伸びが鈍れば自然に止まる）。
+   */
+  function planSupport(B, pending, solos) {
+    const soloScore = new Map(solos.map((x) => [x.u, x.c ? x.c.score : 0]));
+    const attackers = solos.filter((x) => x.c).sort((a, b) => b.c.score - a.c.score).slice(0, 4).map((x) => x.u);
+    // 援護値が大きい攻撃役候補も加える（単独では弱いが補正で化ける者）
+    for (const u of pending) if (!attackers.includes(u) && attackers.length < 6) {
+      const T = availableTypes(B, u)[0];
+      if (T && getStat(B, u, T.atkStat) >= 6) attackers.push(u);
+    }
+    let best = null;
+    for (const a of attackers) {
+      for (const ty of availableTypes(B, a)) {
+        const base = chooseAttack(B, a, 0, ty.key);
+        if (!base) continue;
+        const others = pending.filter((x) => x !== a).map((x) => ({ u: x, v: supportBonus(B, x, ty.key, base.target, true).value }))
+          .filter((x) => x.v > 0).sort((x, y) => (y.v - soloScore.get(y.u) * 0.3) - (x.v - soloScore.get(x.u) * 0.3));
+        // 先頭から k 体を援護に回す案をすべて比べる（+11〜+13 のように一度期待値が下がる帯を越えられるように）
+        let bestK = 0, bestVal = base.score - soloScore.get(a), bestC = base;
+        let extra = 0, spent = 0;
+        const limit = Math.min(others.length, 20);
+        for (let k = 1; k <= limit; k++) {
+          extra += others[k - 1].v; spent += soloScore.get(others[k - 1].u);
+          const c = chooseAttack(B, a, extra, ty.key);
+          if (!c) break;
+          const val = c.score - (soloScore.get(a) + spent);
+          if (val > bestVal + 0.3) { bestVal = val; bestK = k; bestC = c; }
+        }
+        if (!bestK) continue;
+        const chosen = others.slice(0, bestK).map((o) => o.u);
+        const cur = bestC;
+        const value = bestVal;
+        if (value > 0.5 && (!best || value > best.value)) best = { a, type: ty.key, supporters: chosen, c: cur, value };
+      }
+    }
+    return best;
   }
 
   function initiative(B) {
@@ -1429,7 +1555,8 @@
     B.round = 0;
     resetUses(B, 'engagement');
     for (const t of B.teams) for (const u of t.units) u.exLeft = u.exMax;
-    log(B, `―― 交戦フェイズ ${B.engagement} ――`);
+    if (B.hooks && B.hooks.beforeEngagement) B.hooks.beforeEngagement(B);
+    log(B, B.engagement === 1 ? `―― ターン1：交戦フェイズ ――` : `―― ターン${B.engagement}：移動フェイズ → 遭遇フェイズ → 交戦フェイズ ――`);
     if (B.engagement > 1) for (const t of B.teams) for (const u of t.units) fire(B, u, 'movePhase', { target: null });
     for (const t of B.teams) ensureFront(B, t);
     for (const t of B.teams) for (const u of t.units) fire(B, u, 'engagementStart', { target: null });
@@ -1451,11 +1578,16 @@
     for (const t of B.teams) for (const u of t.units) fire(B, u, 'engagementEnd', { target: null });
     expireStates(B, 'engagement');
     revertReshape(B);
+    const vanished = new Map();
+    const savedLog = B.log; B.log = null; // 同名の召喚体の消滅はまとめて記録
     for (const t of B.teams) for (const u of t.units.slice()) {
       if (!u.alive) continue;
-      if (u.summoned && u.life === 'engagement') vanish(B, u, '交戦フェイズ終了');
-      else if (u.fadeAt !== null && u.fadeAt <= B.engagement) vanish(B, u, 'マスター不在');
+      if (u.summoned && u.life === 'engagement') { if (u.group) u.group.done = true; vanish(B, u, '交戦フェイズ終了'); vanished.set(u.name, (vanished.get(u.name) || 0) + 1); }
+      else if (u.fadeAt !== null && u.fadeAt <= B.engagement) { B.log = savedLog; vanish(B, u, 'マスター不在'); B.log = null; }
     }
+    B.log = savedLog;
+    for (const [n, k] of vanished) log(B, `　${n}${k > 1 ? '×' + k : ''} 消滅（交戦フェイズ終了）`);
+    if (B.hooks && B.hooks.afterEngagement) B.hooks.afterEngagement(B);
   }
 
   function createUnit(B, ch, team, pos, opts) {
@@ -1492,10 +1624,13 @@
     const cap = B.rules.maxUnitsPerTeam || 40;
     n = Math.max(0, Math.min(n, cap - team.units.filter((x) => x.alive).length));
     if (n <= 0) return;
+    const group = eff.collapse || eff.territory ? { name: ch.name, total: n, ids: [], done: false, collapse: !!eff.collapse, territory: !!eff.territory } : null;
+    if (group) (B.summonGroups = B.summonGroups || []).push(group);
     for (let i = 0; i < n; i++) {
       const u = createUnit(B, ch, owner.team, eff.pos || 'front', {
         summoned: true, parentId: eff.link ? owner.id : null, life: eff.life || 'battle', summonKey: owner.team + '|' + ch.name,
       });
+      if (group) { group.ids.push(u.id); u.group = group; }
       team.units.push(u);
       fire(B, u, 'battleStart', { target: null });
       u.hp = u.maxHp;
@@ -1562,15 +1697,16 @@
     return B;
   }
 
-  function runBattle(C, rng, logOn) {
+  function runBattle(C, rng, logOn, hooks) {
     const B = buildBattle(C, rng, logOn);
+    B.hooks = hooks || null;
     if (logOn) {
       for (const t of B.teams) log(B, `【${t.name}】` + t.units.map((u) => `${u.name}（HP${u.maxHp}・${u.pos === 'front' ? '前衛' : '後衛'}）`).join('、'));
     }
     while (aliveTeams(B).length > 1 && B.engagement < C.maxEngagements) runEngagement(B);
     const alive = aliveTeams(B);
     B.winner = alive.length === 1 ? alive[0].idx : -1;
-    log(B, B.winner >= 0 ? `勝者：${B.teams[B.winner].name}` : (alive.length === 0 ? '相打ち（引き分け）' : '交戦回数の上限に到達（引き分け）'));
+    log(B, B.winner >= 0 ? `勝者：${B.teams[B.winner].name}` : (alive.length === 0 ? '相打ち（引き分け）' : 'ターン数の上限に到達（引き分け）'));
     return B;
   }
 
