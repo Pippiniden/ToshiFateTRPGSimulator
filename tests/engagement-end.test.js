@@ -106,6 +106,23 @@ for (const a of servants) for (const b of servants) {
   if (!broke) fail('陣地破壊', '宝具が一度も使われていない（テストが機能していない）');
 }
 
+// 攻撃対象の変更：イスカンダルのカリスマは自分・神威の車輪・王の軍勢へ。召喚体を庇って本体が倒れない
+{
+  const sc = P.scenarios.find((x) => x.name.startsWith('イスカンダル'));
+  const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: sc });
+  const seen = { army: 0, chariot: 0 };
+  for (let i = 0; i < 300; i++) {
+    const B = E.runBattle(C, E.mulberry32(E.seedFor(7, i)), true);
+    B.log.forEach((l, j) => {
+      if (l.includes('攻撃対象を王の軍勢に変更')) seen.army++;
+      if (l.includes('攻撃対象を神威の車輪に変更')) seen.chariot++;
+      if (l.includes('イスカンダル「カリスマ」で攻撃対象を自分に変更')) fail('攻撃対象の変更', `召喚体への攻撃をイスカンダル本人が庇っている：${B.log[j + 1].trim()}`);
+    });
+    battles++;
+  }
+  if (!seen.army || !seen.chariot) fail('攻撃対象の変更', `王の軍勢${seen.army}回・神威の車輪${seen.chariot}回しか変更されていない`);
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
-console.log('OK：交戦フェイズ終了処理に問題なし');
+console.log('OK：交戦フェイズ終了処理・攻撃対象の変更に問題なし');

@@ -346,6 +346,7 @@
       case 'negateIncoming': return `受ける攻撃の${e.names || e.kinds}補正無効`;
       case 'endure': return e.value && e.value !== '1' ? `HP${e.value}で復活` : 'HP1で耐える';
       case 'reshape': return 'ステータス振り直し';
+      case 'redirect': return e.dest && String(e.dest).trim() ? `攻撃対象を${String(e.dest).split(/[,、]+/).map((x) => x.trim()).filter(Boolean).map((x) => (x === '自分' ? x : `「${x}」`)).join('か')}に変更` : '攻撃対象を自分に変更';
       case 'summon': return `「${e.char}」を${e.value && e.value !== '1' ? e.value + '体' : ''}召喚${e.life === 'engagement' ? '（交戦フェイズ終了まで）' : ''}`;
       default: return T.label;
     }
@@ -497,6 +498,7 @@
           break;
         case 'state': label = '状態'; ctl = sel(e, 'state', D.states.map((s) => [s.name, s.name])); break;
         case 'key': label = 'リソース'; ctl = txt(e, 'key', { ph: 'np', cls: 'expr' }); ctl.style.width = '80px'; break;
+        case 'dest': label = '変更先'; ctl = txt(e, 'dest', { ph: '空欄＝自分 / 自分, 王の軍勢', label: '攻撃対象の変更先（カンマ区切り）' }); ctl.style.width = '200px'; break;
         case 'names': label = 'スキル名'; ctl = txt(e, 'names', { ph: '対魔力（カンマ区切り）' }); ctl.style.width = '140px'; break;
         case 'kinds': label = '種別'; ctl = txt(e, 'kinds', { ph: 'class,skill,np,state', cls: 'expr' }); ctl.style.width = '150px'; break;
         case 'floor': label = 'HP下限'; ctl = num(e, 'floor', { allowEmpty: true, cls: 'w-num', ph: 'なし' }); break;
@@ -571,7 +573,7 @@
     const sc = currentScenario();
     const left = h('section', { class: 'panel stack', 'aria-label': 'テストケース' });
     if ((D.version || 1) < (PRE.version || 1)) {
-      left.appendChild(h('div', { class: 'notice' }, '初期データが更新されています（陣地破壊、ジャンヌ宝具のデバフ無効、メルトのドレイン解除、援護AIが補正値ペナルティの谷を越えるように、召喚体は召喚者の脱落で消滅、王の軍勢の半数消滅、複数の味方による援護の重ね掛け、英雄点から初期令呪を自動計算、巡数＝参加PL数、ギルガメッシュ・エルキドゥ・ヘラクレス、ライダーの途中召喚など）。保存データの初期キャラクターは古い定義のままなので、最新版への更新をおすすめします。',
+      left.appendChild(h('div', { class: 'notice' }, '初期データが更新されています（イスカンダルのカリスマで王の軍勢・神威の車輪へ攻撃対象を変更、陣地破壊、ジャンヌ宝具のデバフ無効、メルトのドレイン解除、援護AIが補正値ペナルティの谷を越えるように、召喚体は召喚者の脱落で消滅、王の軍勢の半数消滅、複数の味方による援護の重ね掛け、英雄点から初期令呪を自動計算、巡数＝参加PL数、ギルガメッシュ・エルキドゥ・ヘラクレス、ライダーの途中召喚など）。保存データの初期キャラクターは古い定義のままなので、最新版への更新をおすすめします。',
         h('div', { class: 'row', style: { marginTop: '6px' } },
           btn('最新版に更新（初期キャラを上書き）', () => { const r = mergePresets(true); save(); render(); toast(`${r.added}件を追加、${r.updated}件の初期キャラクターを最新版にしました`); }, 'sm primary'),
           btn('追加のみ（編集を残す）', () => { const r = mergePresets(false); save(); render(); toast(`${r.added}件を追加しました（既存のキャラクターはそのまま）`); }, 'sm'),
@@ -1634,6 +1636,7 @@
         h('li', null, '陣地：陣営フラグ「陣地」（陣地作成）、陣地扱いの状態（無限の剣製・パンドラボックス）、固有結界の召喚体（王の軍勢）は、相手の「陣地破壊」で消えます。'),
         h('li', null, '巡：既定は「参加PL数」ぶん（マスターと契約サーヴァントで1人、マスター未配置のサーヴァントも1人と数える）。「1巡の間」の効果は、付与された者の手番が1回終わるまで続きます。各巡で陣営ごとに前衛が1回ずつ行動。決着しなければ交戦フェイズを繰り返し、最大交戦回数で引き分け。'),
         h('li', null, '攻撃：物理（筋力）・魔術（魔力）・奇襲（幸運、要フラグ）。攻撃値−防御値がダメージ。後衛は攻撃されません。'),
+        h('li', null, '攻撃対象の変更（カリスマなど）：変更先は「自分」か、名前を指定した味方（イスカンダルなら神威の車輪・王の軍勢）。AIは「失うものの重さ」で比べ、召喚体を盾にして本体を守ります。召喚体への攻撃を本体が庇うことはせず、王の軍勢は半数割れで陣地ごと崩れる1体は盾にしません。'),
         h('li', null, '援護：1回の攻撃に複数の味方が援護を重ねられます。AIは、援護を1体足すごとの攻撃の伸びがその味方の単独攻撃を上回る間だけ追加します（補正値+11以上の面数ペナルティで自然に止まる）。王の軍勢のような弱い召喚体が、強い味方の攻撃をまとめて底上げします。'),
         h('li', null, '補正値ペナルティ（+11以上で10ごとに面数−1、−5以上で面数+1）、面数の上下限、EXランクの振り直し、攻撃対象変更、HP1で耐える、マスターからサーヴァントへのダメージ半減。'),
         h('li', null, 'マスター：メンバーの ⚙ から「マスター」を指定すると契約関係になります。マスターのスキルは「自分のサーヴァント」を対象にでき（式 isServant(actor)、対象「自分のサーヴァント」）、マスターが倒れるとサーヴァントはマスターのHP分のダメージを受けて交戦終了時に消滅します。マスターの攻撃はサーヴァントへのダメージが半減（DRONE などのフラグで無効）。'),
@@ -1690,8 +1693,9 @@
     const scanBlocks = (blocks) => {
       for (const b of blocks || []) for (const e of b.effects || []) {
         if (e.type === 'applyState' && e.state) stateNames.add(e.state);
-        if (e.type === 'summon' && e.char) {
-          const t = D.characters.find((x) => x.name === e.char);
+        const refs = e.type === 'summon' && e.char ? [e.char] : e.type === 'redirect' && e.dest ? String(e.dest).split(/[,、]+/).map((x) => x.trim()) : [];
+        for (const n of refs) {
+          const t = D.characters.find((x) => x.name === n);
           if (t && !ids.has(t.id)) { ids.add(t.id); queue.push(t.id); }
         }
       }
@@ -1803,6 +1807,7 @@
     const fix = (blocks) => { for (const b of blocks || []) for (const e of b.effects || []) {
       if (e.type === 'applyState' && stateName[e.state]) e.state = stateName[e.state];
       if (e.type === 'summon' && charName[e.char]) e.char = charName[e.char];
+      if (e.type === 'redirect' && e.dest) e.dest = String(e.dest).split(/[,、]+/).map((x) => x.trim()).filter(Boolean).map((x) => charName[x] || x).join(', ');
     } };
     for (const o of touched) { if (o.skills) o.skills.forEach((sk) => fix(sk.blocks)); else fix(o.blocks); }
     let lastScn = null;

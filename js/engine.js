@@ -43,7 +43,7 @@
     negateOpp: { label: '相手のスキル補正を無効', params: ['names', 'kinds'], phase: 'roll' },
     suppressSelf: { label: '自分のスキル補正を無効（強化無効）', params: ['kinds'], phase: 'roll' },
     noRedirect: { label: '相手の攻撃対象変更を無効', params: [], phase: 'roll' },
-    redirect: { label: '攻撃対象を自分に変更', params: [], phase: 'redirect' },
+    redirect: { label: '攻撃対象を変更（自分・指定した味方）', params: ['dest'], phase: 'redirect' },
     endure: { label: 'HPが0になる時に耐える・復活', params: ['value'], phase: 'lethal' },
     reshape: { label: 'ステータス振り直し（変容）', params: ['profiles'], phase: 'other' },
     heal: { label: 'HP回復', params: ['value', 'to', 'if'], phase: 'other' },
@@ -807,10 +807,11 @@
   // ------------------------------------------------------------------
   function attackTypeDef(B, key) { return B.rules.attackTypes.find((t) => t.key === key); }
 
-  function quickDamage(B, attacker, typeKey, target, extraFixed) {
+  function quickDamage(B, attacker, typeKey, target, extraFixed, addFixed) {
     const T = attackTypeDef(B, typeKey);
     const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, dry: true, negate: incomingNegation(B, target, attacker) });
     if (extraFixed !== undefined) A.fixed = extraFixed;
+    if (addFixed) A.fixed += addFixed;
     const ae = rollEstimate(B, attacker, A, T.atkStat);
     const D = prepareRoll(B, target, 'defend', { type: typeKey, opp: attacker, dry: true, negate: A.negate });
     const de = rollEstimate(B, target, D, A.defStat || T.defStat);
@@ -1238,26 +1239,75 @@
   // ------------------------------------------------------------------
   // 攻撃
   // ------------------------------------------------------------------
-  function handleRedirect(B, attacker, target, typeKey) {
+  /** 攻撃対象の変更先：dest が空なら自分、「自分」または味方キャラクター名（カンマ区切り） */
+  function redirectDests(B, holder, effs) {
+    const team = B.teams[holder.team];
+    const out = new Set();
+    for (const e of effs) {
+      const names = String(e.dest || '').split(/[,、]+/).map((x) => x.trim()).filter(Boolean);
+      if (!names.length) { out.add(holder); continue; }
+      for (const n of names) {
+        if (n === '自分' || n === 'self') { out.add(holder); continue; }
+        for (const x of team.units) if (x.alive && x.pos === 'front' && x.name === n && (!x.summoned || !x.parentId || x.parentId === holder.id)) out.add(x);
+      }
+    }
+    return [...out].filter((x) => x.alive && x.pos === 'front');
+  }
+
+  /** そのユニットを失った時の重さ（AIの攻撃対象変更の判断用） */
+  function unitWorth(B, u) {
+    if (!u.summoned) return 100;
+    const g = u.group;
+    if (g && !g.done) {
+      const alive = B.teams[u.team].units.filter((x) => x.alive && x.group === g).length;
+      const groupWorth = 60;
+      if (g.collapse && (alive - 1) * 2 <= g.total) return groupWorth; // この1体で群れごと崩れる
+      return groupWorth / Math.max(1, g.total);
+    }
+    return 40;
+  }
+
+  function redirectCost(B, u, q) {
+    const pd = q.killP;
+    return unitWorth(B, u) * (pd + (1 - pd) * 0.5 * Math.min(1, q.E / Math.max(1, u.hp)));
+  }
+
+  function handleRedirect(B, attacker, target, typeKey, extra) {
     const team = B.teams[target.team];
-    let best = null;
-    const baseQ = quickDamage(B, attacker, typeKey, target);
+    const qOf = new Map();
+    const qd = (u) => { if (!qOf.has(u)) { const q = quickDamage(B, attacker, typeKey, u, undefined, extra); qOf.set(u, q); } return qOf.get(u); };
+    const baseQ = qd(target);
     const baseScore = target.hp - baseQ.E;
+    const baseCost = redirectCost(B, target, baseQ);
+    let best = null;
     for (const c of team.units) {
-      if (!c.alive || c.pos !== 'front' || c === target) continue;
+      if (!c.alive || c.pos !== 'front') continue;
       for (const inst of c.insts) {
         const bl = matchBlocks(B, inst, 'allyAttacked', { opp: attacker, type: typeKey }, c);
-        if (!bl.some((b) => (b.effects || []).some((e) => e.type === 'redirect'))) continue;
+        const effs = [];
+        for (const b of bl) for (const e of b.effects || []) if (e.type === 'redirect') effs.push(e);
+        if (!effs.length) continue;
         if (!canUse(inst)) continue;
-        const q = quickDamage(B, attacker, typeKey, c);
-        const score = c.hp - q.E;
-        if (score > baseScore + 3 && (!best || score > best.score)) best = { unit: c, inst, blocks: bl, score };
+        for (const d of redirectDests(B, c, effs)) {
+          if (d === target) continue;
+          const q = qd(d);
+          const cost = redirectCost(B, d, q);
+          // 召喚体が絡む場合は「失うものの重さ」で比べる（軍勢を盾にする／召喚体を庇って本体が倒れない）
+          const ok = d.summoned || target.summoned
+            ? cost < baseCost - 1
+            : d.hp - q.E > baseScore + 3;
+          if (!ok) continue;
+          const score = -cost;
+          if (!best || score > best.score) best = { unit: c, dest: d, inst, blocks: bl, score };
+        }
       }
     }
     if (!best) return { target, post: null };
     if (isLimited(best.inst) && !aiWants(B, best.inst, { subject: target })) return { target, post: null };
     if (isLimited(best.inst) || best.inst.charges !== null) consume(B, best.inst);
-    log(B, `　${best.unit.name}「${best.inst.def.name}」で攻撃対象を自分に変更`);
+    log(B, best.dest === best.unit
+      ? `　${best.unit.name}「${best.inst.def.name}」で攻撃対象を自分に変更`
+      : `　${best.unit.name}「${best.inst.def.name}」で攻撃対象を${best.dest.name}に変更`);
     const post = [];
     for (const b of best.blocks) for (const e of b.effects || []) {
       if (!(EFFECT_TYPES[e.type] && EFFECT_TYPES[e.type].phase === 'other')) continue;
@@ -1265,7 +1315,7 @@
       if (e.if && String(e.if).trim()) post.push({ owner: best.unit, eff: e });
       else runEffect(B, best.unit, e, { actor: best.unit, target: attacker, event: { damage: 0 } });
     }
-    return { target: best.unit, post };
+    return { target: best.dest, post };
   }
 
   function incomingNegation(B, target, attacker) {
@@ -1302,7 +1352,7 @@
     let redirectPost = null;
     let finalTarget = target;
     if (!pre.aoe) {
-      if (!pre.noRedirect) { const r = handleRedirect(B, attacker, target, typeKey); finalTarget = r.target; redirectPost = r.post; }
+      if (!pre.noRedirect) { const r = handleRedirect(B, attacker, target, typeKey, support ? support.value : 0); finalTarget = r.target; redirectPost = r.post; }
       finalTarget = csRedirect(B, attacker, typeKey, finalTarget);
     }
     const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: finalTarget, extra: support ? support.value : 0, negate: incomingNegation(B, finalTarget, attacker) });
