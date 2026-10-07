@@ -123,6 +123,20 @@ for (const a of servants) for (const b of servants) {
   if (!seen.army || !seen.chariot) fail('攻撃対象の変更', `王の軍勢${seen.army}回・神威の車輪${seen.chariot}回しか変更されていない`);
 }
 
+// 「援護を使う」が未指定の陣営（総当たりなど）も、画面の既定と同じく援護ありで戦う
+{
+  const sc = P.scenarios.find((x) => x.name.startsWith('イスカンダル'));
+  const bare = { teams: sc.teams.map((t) => ({ name: t.name, members: t.members })), rounds: sc.rounds, maxEngagements: sc.maxEngagements };
+  const rate = (scn) => {
+    const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: scn });
+    let w = 0;
+    for (let i = 0; i < 200; i++) { if (E.runBattle(C, E.mulberry32(E.seedFor(11, i)), false).winner === 0) w++; battles++; }
+    return w;
+  };
+  const a = rate(sc), b = rate(bare);
+  if (a !== b) fail('援護の既定値', `テストケース ${a}勝 と、援護未指定の同じ対戦 ${b}勝 が一致しない`);
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
-console.log('OK：交戦フェイズ終了処理・攻撃対象の変更に問題なし');
+console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値に問題なし');

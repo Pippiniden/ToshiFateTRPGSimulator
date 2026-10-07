@@ -1594,7 +1594,7 @@
     if (ids.length < 2) { toast('2体以上選んでください'); return; }
     const jobs = []; const pairs = [];
     for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
-      const sc = { id: 'rr', name: 'rr', teams: [{ name: 'A', members: [{ charId: ids[i], pos: 'front' }] }, { name: 'B', members: [{ charId: ids[j], pos: 'front' }] }], rounds: { mode: 'pl', value: 2 }, maxEngagements: +R.maxEngagements || 10 };
+      const sc = { id: 'rr', name: 'rr', teams: [{ name: 'A', support: true, members: [{ charId: ids[i], pos: 'front' }] }, { name: 'B', support: true, members: [{ charId: ids[j], pos: 'front' }] }], rounds: { mode: 'pl', value: 2 }, maxEngagements: +R.maxEngagements || 10 };
       jobs.push({ data: clone(scenarioData(sc)), opts: { trials: Math.max(1, +R.trials || 100), seed: 1, start: 0, logTrials: 0 } });
       pairs.push([i, j]);
     }

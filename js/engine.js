@@ -229,7 +229,7 @@
     const teams = (scn.teams || []).map((t, ti) => ({
       name: t.name || ('陣営' + (ti + 1)),
       flags: String(t.flags || '').split(/[,、\s]+/).filter(Boolean),
-      support: !!t.support,
+      support: t.support !== false, // 画面と同じく、未指定なら援護あり
       csMode: t.csMode || 'auto',
       csAI: t.csAI || 'normal',
       members: (t.members || []).map((m, mi) => {
