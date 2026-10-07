@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>聖杯戦争TRPG バランス試験場</title>
+<meta name="description" content="TRPGの戦闘バランスを大量試行で検証するシミュレーター">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>バランス試験場</h1>
+      <p class="brand-sub" id="rules-name">聖杯戦争型TRPG</p>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="画面">
+    <button role="tab" data-tab="test" id="tab-test">テスト実行</button>
+    <button role="tab" data-tab="chars" id="tab-chars">キャラクター</button>
+    <button role="tab" data-tab="states" id="tab-states">状態</button>
+    <button role="tab" data-tab="rules" id="tab-rules">ルール</button>
+    <button role="tab" data-tab="lab" id="tab-lab">比較・スイープ・総当たり</button>
+    <button role="tab" data-tab="help" id="tab-help">使い方</button>
+  </nav>
+  <div class="io">
+    <button class="btn ghost sm" id="btn-export" title="すべての設定をJSONファイルに保存">書き出し</button>
+    <label class="btn ghost sm" for="file-import" title="JSONファイルから設定を読み込み">読み込み</label>
+    <input type="file" id="file-import" accept=".json,application/json" hidden>
+  </div>
+</header>
+<main id="app" class="app"></main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="js/engine.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
