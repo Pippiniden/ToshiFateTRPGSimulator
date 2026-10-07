@@ -79,7 +79,7 @@
     sweep: { teamIdx: 1, memberIdx: 0, param: 'hpExtra', from: 0, to: 180, step: 20, trials: 1000, effectPath: '' },
     rr: { ids: null, trials: 200, maxEngagements: 10 },
   }, (() => { try { return JSON.parse(lsGet(LS_UI) || '{}'); } catch (e) { return {}; } })());
-  UI.result = null; UI.running = false; UI.sweepResult = null; UI.rrResult = null; UI.importOpen = false; UI.confirm = null;
+  UI.result = null; UI.running = false; UI.sweepResult = null; UI.rrResult = null; UI.importOpen = false; UI.confirm = null; UI.importDialog = null; UI.charExportOpen = false; UI.charSel = [];
   let saved = (() => { try { return JSON.parse(lsGet(LS_SAVED) || '[]'); } catch (e) { return []; } })();
 
   let saveTimer = null;
@@ -583,6 +583,10 @@
       btn('新規', () => { const s = newScenario(); D.scenarios.push(s); UI.scnId = s.id; UI.result = null; save(); render(); }, 'sm'),
       btn('複製', () => { const s = clone(sc); s.id = uid('sc'); s.name += '（コピー）'; D.scenarios.push(s); UI.scnId = s.id; save(); render(); }, 'sm'),
       D.scenarios.length > 1 ? confirmBtn('削除', 'del-scn-' + sc.id, () => { D.scenarios = D.scenarios.filter((x) => x !== sc); UI.scnId = null; UI.result = null; save(); render(); }) : null));
+    left.appendChild(h('div', { class: 'row' },
+      btn('書き出し', () => exportItems(bundleScenario(sc), `テストケース_${safeName(sc.name)}.json`, 'file'), 'sm', { title: 'このテストケースを、使っているキャラクター・状態と一緒にJSONファイルに書き出します' }),
+      btn('テキストでコピー', () => exportItems(bundleScenario(sc), '', 'text'), 'sm'),
+      btn('読み込み…', () => { UI.importDialog = { mode: 'input' }; render(); }, 'sm')));
     left.appendChild(field('名前', txt(sc, 'name', { onChange: () => render() })));
 
     sc.teams.forEach((t, ti) => left.appendChild(teamCard(sc, t, ti)));
@@ -985,6 +989,9 @@
     listPanel.append(h('div', { class: 'row' },
       btn('新規', () => { const c = newCharacter(); D.characters.push(c); UI.charId = c.id; save(); render(); }, 'sm'),
       btn('キャラシート取り込み', () => { UI.importOpen = !UI.importOpen; render(); }, 'sm')));
+    listPanel.append(h('div', { class: 'row' },
+      btn('書き出し…', () => { UI.charExportOpen = !UI.charExportOpen; if (UI.charExportOpen && !(UI.charSel || []).length && UI.charId) UI.charSel = [UI.charId]; render(); }, 'sm'),
+      btn('読み込み…', () => { UI.importDialog = { mode: 'input' }; render(); }, 'sm')));
     const list = h('div', { class: 'list', role: 'list' });
     listPanel.append(list);
     function paintList() {
@@ -1008,6 +1015,7 @@
     paintList();
 
     const right = h('div', { class: 'stack' });
+    if (UI.charExportOpen) right.append(charExportPanel());
     if (UI.importOpen) right.append(importPanel());
     const c = D.characters.find((x) => x.id === UI.charId);
     if (c) right.append(charEditor(c));
@@ -1032,6 +1040,8 @@
 
     panel.append(h('div', { class: 'section-head' }, h('h2', null, c.name),
       h('div', { class: 'row' },
+        btn('書き出し', () => exportItems(bundleCharacters([c.id]), `キャラ_${safeName(c.name)}.json`, 'file'), 'sm', { title: 'このキャラクターを、付与する状態や召喚先と一緒にJSONファイルに書き出します' }),
+        btn('テキストでコピー', () => exportItems(bundleCharacters([c.id]), '', 'text'), 'sm', { title: 'チャットなどに貼り付けて共有できるテキストとしてコピー' }),
         btn('複製', () => { const n = clone(c); n.id = uid('ch'); n.name += '（コピー）'; n.skills.forEach((s) => { s.id = uid('sk'); }); D.characters.push(n); UI.charId = n.id; save(); render(); }, 'sm'),
         confirmBtn('削除', 'del-ch-' + c.id, () => {
           D.characters = D.characters.filter((x) => x !== c);
@@ -1655,10 +1665,302 @@
         h('li', null, code('round'), '（その交戦フェイズの何巡目か）、', code('engagement'), '（何ターン目か）', '、', code('event.damage'), '（直前のダメージ）、', code('d(3,6)'), '（3D6を振る）、', code('has(target,\'竜種\')'), '、', code('teamFlag(\'陣地\')'), '、', code('hasInitiative()'), '、', code('allyDown()'), '、', code('floor()'), code('min()'), code('max()'), '。')),
       h('h3', null, 'AI'),
       h('p', null, '攻撃対象と攻撃種別は、期待ダメージ（正規近似）と撃破確率から選びます（キャラごとに「最もHPが低い相手」「指定タグ優先」なども選べます）。回数制限のあるスキルは「使えるときに使う」「効果が大きいときだけ」「HPがしきい値以下のとき」「使わない」から選べます。「まで」付きの補正値は、補正値ペナルティを考慮して期待値が最も高い値を自動で選びます。'),
-      h('h3', null, 'データの保存'),
-      h('p', null, '編集内容はこのブラウザに自動保存されます。別の端末やメンバーと共有するときは「書き出し」でJSONを保存し、「読み込み」で取り込んでください。'),
+      h('h3', null, 'データの保存と共有'),
+      h('p', null, '編集内容はこのブラウザに自動保存されます。共有の方法は3つあります。'),
+      h('ul', null,
+        h('li', null, 'キャラクター：キャラクター画面の「書き出し」（1体）または「書き出し…」（複数を選択）。付与する状態や召喚する乗騎も一緒に入ります。'),
+        h('li', null, 'テストケース：テスト実行画面の「書き出し」。使っているキャラクターと状態も一緒に入ります。'),
+        h('li', null, '全データ：右上の「書き出し」。')),
+      h('p', null, 'どれも「テキストでコピー」でチャットに貼り付けて渡せます。受け取った側は「読み込み…」でファイルを選ぶか、テキストを貼り付けます。今のデータに追加され、同じ名前のものがあれば「既存を使う」「別名で追加」「上書き」を選べます。'),
       h('h3', null, '統計の読み方'),
       h('p', null, '勝率の「±」は95%信頼区間の目安です。1,000試行で約±3%、10,000試行で約±1%。小さな差を比べるときは試行回数を増やしてください。同じシードなら同じ結果が再現されます（並列実行しても同じ）。'));
+  }
+
+
+  // ------------------------------------------------------------------
+  // キャラクター・テストケース単位の書き出しと読み込み
+  // ------------------------------------------------------------------
+  const FORMAT = 'trpg-balance-tester';
+
+  /** 指定キャラクターと、それが参照する状態・召喚先キャラクターを集める */
+  function collectDeps(charIds) {
+    const ids = new Set(charIds);
+    const queue = [...ids];
+    const stateNames = new Set();
+    const scanBlocks = (blocks) => {
+      for (const b of blocks || []) for (const e of b.effects || []) {
+        if (e.type === 'applyState' && e.state) stateNames.add(e.state);
+        if (e.type === 'summon' && e.char) {
+          const t = D.characters.find((x) => x.name === e.char);
+          if (t && !ids.has(t.id)) { ids.add(t.id); queue.push(t.id); }
+        }
+      }
+    };
+    while (queue.length) {
+      const id = queue.pop();
+      const c = D.characters.find((x) => x.id === id);
+      if (c) for (const sk of c.skills || []) scanBlocks(sk.blocks);
+    }
+    // 状態の中から付与される状態も
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const st of D.states) if (stateNames.has(st.name)) {
+        const before = stateNames.size; scanBlocks(st.blocks); if (stateNames.size !== before) grew = true;
+      }
+    }
+    return {
+      characters: D.characters.filter((c) => ids.has(c.id)).map(clone),
+      states: D.states.filter((st) => stateNames.has(st.name)).map(clone),
+    };
+  }
+  const header = (kind) => ({ format: FORMAT, kind, version: PRE.version || 1, exportedAt: new Date().toISOString(), rulesName: D.rules.name });
+  function bundleCharacters(ids) { return Object.assign(header('characters'), collectDeps(ids), { scenarios: [] }); }
+  function bundleScenario(sc) {
+    const deps = collectDeps(sc.teams.flatMap((t) => t.members.map((m) => m.charId)));
+    return Object.assign(header('scenario'), deps, { scenarios: [clone(sc)] });
+  }
+  const safeName = (n) => String(n).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+  function downloadJSON(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: filename });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  function copyText(text, okMsg) {
+    const fallback = () => { UI.importDialog = { mode: 'showText', text }; render(); };
+    try {
+      navigator.clipboard.writeText(text).then(() => toast(okMsg || 'クリップボードにコピーしました'), fallback);
+    } catch (e) { fallback(); }
+  }
+  function exportItems(bundle, filename, how) {
+    if (how === 'text') copyText(JSON.stringify(bundle), 'クリップボードにコピーしました。チャットなどに貼り付けて共有できます');
+    else { downloadJSON(bundle, filename); toast('書き出しました'); }
+  }
+
+  /** 読み込んだJSONを解釈する */
+  function parseBundle(text) {
+    let o;
+    try { o = JSON.parse(String(text).trim()); } catch (e) { throw new Error('JSONとして読めませんでした。書き出したファイルか、コピーしたテキストをそのまま使ってください。'); }
+    if (!o || typeof o !== 'object') throw new Error('内容が空です。');
+    if (Array.isArray(o)) o = { characters: o };
+    const kind = o.kind || (o.rules && Array.isArray(o.characters) ? 'all' : o.scenarios && o.scenarios.length ? 'scenario' : 'characters');
+    const b = { kind, characters: o.characters || [], states: o.states || [], scenarios: o.scenarios || [], rules: o.rules || null, raw: o };
+    if (!Array.isArray(b.characters) || !Array.isArray(b.states) || !Array.isArray(b.scenarios)) throw new Error('このツールの形式ではありません。');
+    if (!b.characters.length && !b.scenarios.length && !b.states.length) throw new Error('キャラクター・状態・テストケースが含まれていません。');
+    return b;
+  }
+
+  // ID を除いて内容が同じか
+  const stripIds = (o) => JSON.stringify(o, (k, v) => (k === 'id' || k === 'charId' ? undefined : v));
+  function makePlan(b) {
+    const items = [];
+    const add = (type, obj, existing) => {
+      const same = existing && stripIds(existing) === stripIds(obj);
+      items.push({ type, obj, existing, status: !existing ? 'new' : same ? 'same' : 'diff', action: !existing ? 'add' : same ? 'use' : 'rename' });
+    };
+    for (const st of b.states) add('state', st, D.states.find((x) => x.name === st.name));
+    for (const c of b.characters) add('character', c, D.characters.find((x) => x.name === c.name));
+    for (const sc of b.scenarios) {
+      const ex = D.scenarios.find((x) => x.name === sc.name);
+      const same = ex && stripIds(ex) === stripIds(sc);
+      items.push({ type: 'scenario', obj: sc, existing: ex, status: !ex ? 'new' : same ? 'same' : 'diff', action: !ex ? 'add' : same ? 'skip' : 'rename' });
+    }
+    return { kind: b.kind, items, bundle: b };
+  }
+  function uniqueName(base, taken) {
+    let n = base + '（読込）', i = 2;
+    while (taken(n)) n = base + `（読込${i++}）`;
+    return n;
+  }
+  function applyPlan(plan) {
+    const stateName = {}, charName = {}, charId = {};
+    let added = 0, replaced = 0, reused = 0, skipped = 0;
+    const touched = [];
+    for (const it of plan.items.filter((x) => x.type === 'state')) {
+      const st = clone(it.obj);
+      if (it.action === 'skip') { skipped++; continue; }
+      if (it.action === 'use') { stateName[st.name] = st.name; reused++; continue; }
+      if (it.action === 'overwrite') { st.id = it.existing.id; D.states[D.states.indexOf(it.existing)] = st; stateName[st.name] = st.name; replaced++; touched.push(st); continue; }
+      const nn = it.action === 'rename' ? uniqueName(st.name, (n) => D.states.some((x) => x.name === n)) : st.name;
+      stateName[st.name] = nn; st.name = nn; st.id = uid('st'); D.states.push(st); added++; touched.push(st);
+    }
+    const newChars = [];
+    for (const it of plan.items.filter((x) => x.type === 'character')) {
+      const c = clone(it.obj);
+      const oldId = c.id, oldName = c.name;
+      if (it.action === 'skip') { skipped++; continue; }
+      if (it.action === 'use') { charId[oldId] = it.existing.id; charName[oldName] = it.existing.name; reused++; continue; }
+      (c.skills || []).forEach((sk) => { sk.id = uid('sk'); });
+      if (it.action === 'overwrite') { c.id = it.existing.id; D.characters[D.characters.indexOf(it.existing)] = c; replaced++; }
+      else {
+        if (it.action === 'rename') c.name = uniqueName(c.name, (n) => D.characters.some((x) => x.name === n) || newChars.some((x) => x.name === n));
+        c.id = uid('ch'); D.characters.push(c); added++;
+      }
+      charId[oldId] = c.id; charName[oldName] = c.name; newChars.push(c); touched.push(c);
+    }
+    // 取り込んだもの同士の参照（状態名・召喚先）を付け替え
+    const fix = (blocks) => { for (const b of blocks || []) for (const e of b.effects || []) {
+      if (e.type === 'applyState' && stateName[e.state]) e.state = stateName[e.state];
+      if (e.type === 'summon' && charName[e.char]) e.char = charName[e.char];
+    } };
+    for (const o of touched) { if (o.skills) o.skills.forEach((sk) => fix(sk.blocks)); else fix(o.blocks); }
+    let lastScn = null;
+    for (const it of plan.items.filter((x) => x.type === 'scenario')) {
+      if (it.action === 'skip') { skipped++; continue; }
+      const sc = clone(it.obj);
+      for (const t of sc.teams || []) for (const m of t.members || []) m.charId = charId[m.charId] || m.charId;
+      if (it.action === 'overwrite') { sc.id = it.existing.id; D.scenarios[D.scenarios.indexOf(it.existing)] = sc; replaced++; }
+      else {
+        if (it.action === 'rename') sc.name = uniqueName(sc.name, (n) => D.scenarios.some((x) => x.name === n));
+        sc.id = uid('sc'); D.scenarios.push(sc); added++;
+      }
+      lastScn = sc;
+    }
+    return { added, replaced, reused, skipped, lastScn, firstChar: newChars[0] || null };
+  }
+
+  function openImport(text) {
+    try {
+      const b = parseBundle(text);
+      UI.importDialog = { mode: 'plan', plan: makePlan(b) };
+    } catch (e) {
+      UI.importDialog = { mode: 'input', error: e.message, text };
+    }
+    render();
+  }
+  function readFileThen(file, cb) {
+    const rd = new FileReader();
+    rd.onload = () => cb(String(rd.result));
+    rd.readAsText(file);
+  }
+
+  const STATUS_LABEL = { new: ['新規', 'buff'], same: ['同じ内容が既にある', 'skill'], diff: ['同名で内容が違う', 'debuff'] };
+  const TYPE_LABEL = { scenario: 'テストケース', character: 'キャラクター', state: '状態' };
+  function actionOptions(it) {
+    if (it.status === 'new') return [['add', '追加'], ['skip', '取り込まない']];
+    if (it.type === 'scenario') return it.status === 'same' ? [['skip', '既存を使う'], ['rename', '別名で追加']] : [['rename', '別名で追加'], ['overwrite', '上書き'], ['skip', '取り込まない']];
+    return [['use', '既存を使う'], ['rename', '別名で追加'], ['overwrite', '上書き']];
+  }
+
+  function importDialog() {
+    const d = UI.importDialog;
+    if (!d) return null;
+    const close = () => { UI.importDialog = null; render(); };
+    const box = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '読み込み' });
+    const wrap = h('div', { class: 'modal-backdrop', onclick: (ev) => { if (ev.target === wrap) close(); } }, box);
+    if (d.mode === 'showText') {
+      const ta = h('textarea', { rows: 8, readonly: true }); ta.value = d.text;
+      box.append(h('h2', null, 'テキストとして書き出し'), h('p', { class: 'small muted' }, 'クリップボードに直接コピーできなかったため、下のテキストをすべて選択してコピーしてください。'), ta,
+        h('div', { class: 'row' }, btn('閉じる', close, 'primary')));
+      setTimeout(() => { ta.focus(); ta.select(); }, 0);
+      return wrap;
+    }
+    if (d.mode === 'input') {
+      const ta = h('textarea', { rows: 8, placeholder: '書き出したJSONのテキストを貼り付け' }); ta.value = d.text || '';
+      const file = h('input', { type: 'file', accept: '.json,application/json,text/plain', id: 'imp-file' });
+      file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) readFileThen(f, openImport); });
+      box.append(h('h2', null, '読み込み'),
+        h('p', { class: 'small muted' }, 'キャラクター・テストケースを書き出したファイル、またはコピーしたテキストを読み込みます。今のデータに追加され、同じ名前があれば扱いを選べます。'),
+        d.error ? h('div', { class: 'notice err' }, d.error) : null,
+        field('ファイルから', file),
+        field('テキストを貼り付け', ta),
+        h('div', { class: 'row' }, btn('内容を確認', () => openImport(ta.value), 'primary'), btn('キャンセル', close, 'ghost')));
+      return wrap;
+    }
+    // plan
+    const plan = d.plan;
+    const counts = { scenario: 0, character: 0, state: 0 };
+    plan.items.forEach((it) => { counts[it.type]++; });
+    box.append(h('h2', null, '読み込む内容の確認'),
+      h('p', { class: 'small muted' }, Object.entries(counts).filter(([, n]) => n).map(([t, n]) => `${TYPE_LABEL[t]} ${n}件`).join('・') +
+        (plan.bundle.raw && plan.bundle.raw.rulesName && plan.bundle.raw.rulesName !== D.rules.name ? `（書き出し元のルール：${plan.bundle.raw.rulesName}）` : '')));
+    if (plan.kind === 'all') {
+      box.append(h('div', { class: 'notice' }, 'これは全データの書き出しファイルです。今のデータに追加するか、すべて置き換えるかを選べます。',
+        h('div', { class: 'row', style: { marginTop: '6px' } }, confirmBtn('すべて置き換える', 'replace-all', () => {
+          const o = clone(plan.bundle.raw); delete o.format; delete o.kind; delete o.exportedAt; delete o.rulesName;
+          o.states = o.states || []; o.scenarios = o.scenarios || [];
+          D = o; UI.result = null; UI.charId = null; UI.stateId = null; UI.scnId = null; UI.importDialog = null; save(); render(); toast('すべてのデータを置き換えました');
+        }))));
+    }
+    const setAll = (action) => { plan.items.forEach((it) => {
+      if (it.status === 'new') return;
+      const a = action === 'use' && it.type === 'scenario' ? 'skip' : action;
+      if (actionOptions(it).some(([v]) => v === a)) it.action = a;
+    }); render(); };
+    if (plan.items.some((it) => it.status !== 'new')) {
+      box.append(h('div', { class: 'row' }, h('span', { class: 'small muted' }, '同名のものをまとめて：'),
+        btn('既存を使う', () => setAll('use'), 'ghost sm'), btn('別名で追加', () => setAll('rename'), 'ghost sm'), btn('上書き', () => setAll('overwrite'), 'ghost sm')));
+    }
+    const order = { scenario: 0, character: 1, state: 2 };
+    const sorted = plan.items.slice().sort((x, y) => order[x.type] - order[y.type]);
+    const row = (it) => {
+      const [lab, cls] = STATUS_LABEL[it.status];
+      return h('tr', null,
+        h('td', { class: 'small muted' }, TYPE_LABEL[it.type]),
+        h('td', null, it.obj.name),
+        h('td', null, h('span', { class: 'pill ' + cls }, lab)),
+        h('td', null, sel(it, 'action', actionOptions(it), { label: it.obj.name + 'の扱い' })));
+    };
+    const table = (items) => h('div', { class: 'table-wrap' }, h('table', { class: 'data import-table' },
+      h('thead', null, h('tr', null, h('th', null, '種類'), h('th', null, '名前'), h('th', null, '状態'), h('th', null, '扱い'))),
+      h('tbody', null, items.map(row))));
+    const decide = sorted.filter((it) => it.status !== 'same');
+    const same = sorted.filter((it) => it.status === 'same');
+    const list = h('div', { class: 'stack', style: { gap: '8px', maxHeight: '50vh', overflowY: 'auto' } });
+    if (decide.length) list.append(table(decide));
+    if (same.length) {
+      const det = h('details', { class: 'log' }, h('summary', null, `同じ内容が既にあるもの ${same.length}件（${same.every((x) => x.action === 'use' || x.action === 'skip') ? 'すべて既存を使う' : '個別に設定'}）`), h('div', { style: { padding: '0 8px 8px' } }, table(same)));
+      if (!decide.length) det.open = true;
+      list.append(det);
+    }
+    box.append(list);
+    box.append(h('p', { class: 'small muted' }, '「既存を使う」はこのツールに既にあるものをそのまま使い、テストケースもそれを参照します。「別名で追加」は名前に（読込）を付けて別に追加します。'));
+    box.append(h('div', { class: 'row' },
+      btn('取り込む', () => {
+        const r = applyPlan(plan);
+        UI.importDialog = null;
+        if (r.lastScn) { UI.scnId = r.lastScn.id; UI.result = null; if (UI.tab !== 'test') UI.tab = 'test'; }
+        else if (r.firstChar) { UI.charId = r.firstChar.id; UI.tab = 'chars'; }
+        save(); render();
+        toast(`追加 ${r.added}件・上書き ${r.replaced}件・既存を使用 ${r.reused}件${r.skipped ? `・取り込まない ${r.skipped}件` : ''}`);
+      }, 'primary'),
+      btn('キャンセル', close, 'ghost')));
+    return wrap;
+  }
+
+  /** 複数キャラクターを選んで書き出すパネル */
+  function charExportPanel() {
+    UI.charSel = (UI.charSel || []).filter((id) => D.characters.some((c) => c.id === id));
+    const selSet = new Set(UI.charSel);
+    const groups = new Map();
+    for (const c of D.characters) { const g = c.cls || 'その他'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
+    const box = h('section', { class: 'panel stack', 'aria-label': 'キャラクターの書き出し' },
+      h('div', { class: 'section-head' }, h('h2', null, 'キャラクターの書き出し'), h('p', null, '選んだキャラクターを、付与する状態や召喚する乗騎と一緒に書き出します。')));
+    const chips = h('div', { class: 'stack', style: { gap: '6px' } });
+    for (const [g, cs] of groups) {
+      chips.append(h('div', { class: 'row tight' }, h('span', { class: 'small muted', style: { minWidth: '72px' } }, g),
+        h('div', { class: 'chips' }, cs.map((c) => h('button', { type: 'button', class: 'chip', 'aria-pressed': selSet.has(c.id) ? 'true' : 'false', onclick: () => {
+          UI.charSel = selSet.has(c.id) ? UI.charSel.filter((x) => x !== c.id) : UI.charSel.concat([c.id]); render();
+        } }, c.name)))));
+    }
+    const n = UI.charSel.length;
+    const deps = n ? collectDeps(UI.charSel) : { characters: [], states: [] };
+    const extra = deps.characters.length - n;
+    box.append(chips,
+      h('div', { class: 'row' },
+        btn('全選択', () => { UI.charSel = D.characters.map((c) => c.id); render(); }, 'ghost sm'),
+        btn('全解除', () => { UI.charSel = []; render(); }, 'ghost sm'),
+        h('span', { class: 'small muted' }, n ? `${n}体を選択${extra > 0 ? `（召喚先 ${extra}体も含む）` : ''}・状態 ${deps.states.length}件` : 'キャラクターを選んでください')),
+      h('div', { class: 'row' },
+        btn('ファイルに書き出し', () => {
+          if (!n) { toast('キャラクターを選んでください'); return; }
+          const first = D.characters.find((c) => c.id === UI.charSel[0]);
+          exportItems(bundleCharacters(UI.charSel), `キャラ_${safeName(n === 1 ? first.name : first.name + 'ほか' + n + '体')}.json`, 'file');
+        }, 'primary', { disabled: n ? null : true }),
+        btn('テキストでコピー', () => { if (n) exportItems(bundleCharacters(UI.charSel), '', 'text'); }, '', { disabled: n ? null : true }),
+        btn('閉じる', () => { UI.charExportOpen = false; render(); }, 'ghost')));
+    return box;
   }
 
   // ------------------------------------------------------------------
@@ -1686,6 +1988,8 @@
     const view = { test: renderTest, chars: renderChars, states: renderStates, rules: renderRules, lab: renderLab, help: renderHelp }[UI.tab] || renderTest;
     const node = view();
     app.replaceChildren(node);
+    const dlg = importDialog();
+    if (dlg) app.append(dlg);
     window.scrollTo(0, y);
   }
 
@@ -1695,28 +1999,15 @@
   }));
 
   $('#btn-export').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(D, null, 1)], { type: 'application/json' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `trpg-balance-${new Date().toISOString().slice(0, 10)}.json` });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    toast('JSONを書き出しました');
+    downloadJSON(Object.assign(header('all'), clone(D)), `trpg-balance-全データ-${new Date().toISOString().slice(0, 10)}.json`);
+    toast('すべてのデータを書き出しました');
   });
   $('#file-import').addEventListener('change', (ev) => {
     const f = ev.target.files && ev.target.files[0];
     if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const o = JSON.parse(rd.result);
-        if (!o.rules || !Array.isArray(o.characters)) throw new Error('形式が違います');
-        o.states = o.states || []; o.scenarios = o.scenarios || [];
-        D = o; UI.result = null; UI.charId = null; UI.stateId = null; UI.scnId = null; save(); render();
-        toast('読み込みました');
-      } catch (e) { toast('読み込めませんでした：このツールで書き出したJSONを選んでください'); }
-      ev.target.value = '';
-    };
-    rd.readAsText(f);
+    readFileThen(f, (text) => { ev.target.value = ''; openImport(text); });
   });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && UI.importDialog) { UI.importDialog = null; render(); } });
 
   if (/^#(test|chars|states|rules|lab|help)$/.test(location.hash)) UI.tab = location.hash.slice(1);
   render();
