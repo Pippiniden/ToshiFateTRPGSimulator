@@ -87,7 +87,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       lsSet(LS_KEY, JSON.stringify(D));
-      lsSet(LS_UI, JSON.stringify({ tab: UI.tab, charId: UI.charId, stateId: UI.stateId, scnId: UI.scnId, sweep: UI.sweep, rr: UI.rr }));
+      lsSet(LS_UI, JSON.stringify({ tab: UI.tab, charId: UI.charId, stateId: UI.stateId, scnId: UI.scnId, sweep: UI.sweep, rr: UI.rr, play: UI.play }));
     }, 250);
   }
   function saveSaved() { lsSet(LS_SAVED, JSON.stringify(saved)); }
@@ -609,6 +609,9 @@
     runBarEl = h('div', { class: 'run-bar' });
     left.appendChild(runBarEl);
     paintRunBar();
+    left.appendChild(h('div', { class: 'row' }, btn('このテストケースを手動で遊ぶ', () => {
+      const P = playState(); P.scnId = sc.id; P.teams = {}; P.active = false; UI.playRes = null; UI.tab = 'play'; save(); render(); window.scrollTo(0, 0);
+    }, 'sm')));
 
     resultsEl = h('section', { class: 'panel stack', 'aria-label': '結果', 'aria-live': 'polite' });
     paintResults();
@@ -1653,6 +1656,283 @@
   }
 
   // ------------------------------------------------------------------
+  // 手動プレイ：どちらか・両方の陣営を自分で操作する
+  //   選択の記録を同じシードで最初から再生し、次の判断の場面で止める（一手戻すも同じ仕組み）
+  // ------------------------------------------------------------------
+  function playState() {
+    UI.play = UI.play || {};
+    const P = UI.play;
+    if (P.seed === undefined) P.seed = 1;
+    P.teams = P.teams || {};
+    P.choices = P.choices || [];
+    return P;
+  }
+  function playScenario() {
+    const P = playState();
+    return D.scenarios.find((s) => s.id === P.scnId) || currentScenario();
+  }
+  function playTeamCfg(ti) {
+    const P = playState();
+    const c = P.teams[ti] = P.teams[ti] || {};
+    if (!c.mode) c.mode = ti === 0 ? 'self' : 'ai';
+    if (!c.cs) c.cs = 'self';
+    if (!c.ex) c.ex = 'ai';
+    return c;
+  }
+  function playManualMap(sc) {
+    const m = {};
+    sc.teams.forEach((t, ti) => { const c = playTeamCfg(ti); if (c.mode === 'self') m[ti] = { cs: c.cs, ex: c.ex }; });
+    return m;
+  }
+  /** 選択の記録から現在の場面を作り直す */
+  function playStep() {
+    const P = playState();
+    const sc = playScenario();
+    try {
+      if (!UI.playC || UI.playCKey !== P.startedAt) { UI.playC = E.compileScenario(scenarioData(sc)); UI.playCKey = P.startedAt; }
+      UI.playRes = E.playManual(UI.playC, { seed: P.seed, teams: P.manual || playManualMap(sc), choices: P.choices });
+      UI.playErr = null;
+    } catch (e) { UI.playRes = null; UI.playErr = e.message; }
+    UI.playForm = null;
+  }
+  function playChoose(choice) {
+    const P = playState();
+    UI.playPrevLog = UI.playRes ? UI.playRes.log.length : 0;
+    P.choices.push(choice); save(); playStep(); render();
+  }
+  function playStart(newSeed) {
+    const P = playState();
+    const sc = playScenario();
+    P.scnId = sc.id;
+    if (newSeed) P.seed = Math.floor(Math.random() * 1e9);
+    P.manual = playManualMap(sc);
+    P.choices = []; P.active = true; P.startedAt = Date.now();
+    UI.playPrevLog = 0;
+    save(); playStep(); render(); window.scrollTo(0, 0);
+  }
+
+  function renderPlay() {
+    const P = playState();
+    if (P.active && !UI.playRes && !UI.playErr) playStep();
+    return P.active ? playGame() : playSetup();
+  }
+
+  function playSetup() {
+    const P = playState();
+    const sc = playScenario();
+    P.scnId = sc.id;
+    const box = h('section', { class: 'panel stack play-setup', 'aria-label': '手動プレイの設定' },
+      h('div', { class: 'section-head' }, h('h2', null, '手動プレイ'),
+        h('p', null, 'テストケースの陣営を自分で操作して戦います。片方だけ操作してAIと対戦することも、両方を操作して1人で検討することもできます。判断が必要な場面ごとにAIのおすすめも表示します。')));
+    box.append(field('テストケース', sel(P, 'scnId', D.scenarios.map((s) => [s.id, s.name]), { onChange: () => { P.teams = {}; render(); }, label: 'テストケース' })));
+    const teams = h('div', { class: 'stack', style: { gap: '8px' } });
+    sc.teams.forEach((t, ti) => {
+      const c = playTeamCfg(ti);
+      const names = t.members.map((m) => (D.characters.find((x) => x.id === m.charId) || {}).name).filter(Boolean).join('、');
+      const row = h('div', { class: 'play-team', style: { '--tc': teamColor(ti) } },
+        h('div', { class: 'row' }, h('span', { class: 'team-dot', style: { background: teamColor(ti) } }), h('strong', null, t.name), h('span', { class: 'small muted' }, names)),
+        h('div', { class: 'row' },
+          h('div', { class: 'seg', role: 'radiogroup', 'aria-label': t.name + 'の操作' },
+            [['self', '自分で操作'], ['ai', 'AI']].map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': c.mode === v ? 'true' : 'false', onclick: () => { c.mode = v; save(); render(); } }, l))),
+          c.mode === 'self' ? h('label', { class: 'field inline' }, h('span', null, '令呪'), sel(c, 'cs', [['self', '自分で選ぶ'], ['ai', 'AIに任せる']])) : null,
+          c.mode === 'self' ? h('label', { class: 'field inline' }, h('span', null, 'EX振り直し'), sel(c, 'ex', [['ai', 'AIに任せる'], ['self', '自分で選ぶ']])) : null));
+      teams.append(row);
+    });
+    box.append(h('div', { class: 'stack', style: { gap: '6px' } }, h('h3', null, '操作する陣営'), teams));
+    box.append(h('div', { class: 'row', style: { alignItems: 'flex-end' } },
+      field('ダイスの乱数シード', num(P, 'seed', { min: 0, cls: 'w-seed' }), { title: '同じシード・同じ選択なら同じ展開になります' }),
+      btn('ランダム', () => { P.seed = Math.floor(Math.random() * 1e9); save(); render(); }, 'sm')));
+    box.append(h('p', { class: 'small muted' }, '「〜までの補正値」の値、先手判定の代表者などの機械的に決まる部分は自動です。宝具など回数に限りのあるスキルを使うか、行動（誰がどの攻撃で誰を狙うか・誰が援護するか）、攻撃対象の変更、令呪、EX振り直し（任意）を選べます。'));
+    const anySelf = sc.teams.some((t, ti) => playTeamCfg(ti).mode === 'self');
+    box.append(h('div', { class: 'run-bar' },
+      btn('開始', () => playStart(false), 'primary big'),
+      btn('ランダムなダイスで開始', () => playStart(true), ''),
+      anySelf ? null : h('span', { class: 'small muted' }, '操作する陣営がないので、AI同士の1戦を最後まで表示します')));
+    return h('div', { class: 'play-wrap' }, box);
+  }
+
+  function playGame() {
+    const P = playState();
+    const sc = playScenario();
+    const R = UI.playRes;
+    const head = h('div', { class: 'play-head' },
+      h('div', { class: 'stack', style: { gap: '2px', minWidth: 0 } },
+        h('h2', null, sc.name),
+        h('div', { class: 'small muted num' }, `シード ${P.seed}・判断 ${P.choices.length}回目まで`)),
+      h('span', { class: 'spacer' }),
+      h('div', { class: 'row tight' },
+        btn('一手戻す', () => { P.choices.pop(); UI.playPrevLog = 0; save(); playStep(); render(); }, 'sm', { disabled: P.choices.length ? null : true }),
+        btn('最初から', () => { P.choices = []; UI.playPrevLog = 0; save(); playStep(); render(); }, 'sm'),
+        btn('新しいダイスで', () => playStart(true), 'sm'),
+        btn('設定に戻る', () => { P.active = false; UI.playRes = null; save(); render(); }, 'ghost sm')));
+    if (UI.playErr) {
+      return h('div', { class: 'play-wrap stack' }, head, h('div', { class: 'notice err' }, '再生できませんでした：' + UI.playErr,
+        h('div', { class: 'row', style: { marginTop: '6px' } }, btn('一手戻す', () => { P.choices.pop(); save(); playStep(); render(); }, 'sm'), btn('最初から', () => { P.choices = []; save(); playStep(); render(); }, 'sm'))));
+    }
+    const board = playBoard(R.view, R.done ? null : R.q);
+    const dec = R.done ? playResultCard(R) : playDecision(R.q);
+    dec.classList.add('pa-dec');
+    const lg = playLog(R.log);
+    lg.classList.add('pa-log');
+    return h('div', { class: 'play-wrap stack' }, head, h('div', { class: 'play-layout' }, board, dec, lg));
+  }
+
+  function playBoard(view, q) {
+    const box = h('section', { class: 'panel stack play-board pa-board', 'aria-label': '戦況' });
+    box.append(h('div', { class: 'row' }, h('h3', null, view.engagement ? `ターン${view.engagement}・${view.round}巡目` : '開始前'),
+      q ? h('span', { class: 'small muted' }, `${q.teamName} の判断待ち`) : null));
+    for (const t of view.teams) {
+      const tb = h('div', { class: 'play-teambox', style: { '--tc': teamColor(t.idx) } },
+        h('div', { class: 'row' }, h('span', { class: 'team-dot', style: { background: teamColor(t.idx) } }), h('strong', null, t.name),
+          h('span', { class: 'pill ' + (t.manual ? 'class' : 'skill') }, t.manual ? '自分' : 'AI'),
+          t.flags.length ? h('span', { class: 'small muted' }, t.flags.join('・')) : null));
+      // 同名の召喚体はまとめる
+      const rows = [];
+      const groups = new Map();
+      for (const u of t.units) {
+        if (u.summoned) {
+          const g = groups.get(u.name);
+          if (g) { g.list.push(u); continue; }
+          const ng = { group: true, name: u.name, list: [u] };
+          groups.set(u.name, ng); rows.push(ng);
+        } else rows.push(u);
+      }
+      for (const r of rows) tb.append(r.group && r.list.length > 1 ? playGroupRow(r) : playUnitRow(r.group ? r.list[0] : r));
+      box.append(tb);
+    }
+    return box;
+  }
+  function hpBar(hp, max) {
+    const p = max > 0 ? Math.max(0, Math.min(1, hp / max)) : 0;
+    return h('span', { class: 'hpbar', 'aria-hidden': 'true' }, h('i', { style: { width: (p * 100).toFixed(1) + '%', background: p > 0.5 ? 'var(--ok)' : p > 0.25 ? 'var(--warn)' : 'var(--danger)' } }));
+  }
+  function playUnitRow(u) {
+    const res = u.res.map((r) => h('span', { class: 'pill np', title: r.key }, `${/^np/.test(r.key) ? '宝具' : r.key} ${r.now}/${r.max}`));
+    return h('div', { class: 'play-unit' + (u.alive ? '' : ' down') },
+      h('div', { class: 'row tight', style: { minWidth: 0 } },
+        h('span', { class: 'nm' }, u.name),
+        h('span', { class: 'small muted' }, u.pos === 'front' ? '前衛' : '後衛'),
+        u.master ? h('span', { class: 'small muted' }, 'マスター') : null,
+        !u.alive ? h('span', { class: 'pill debuff' }, '脱落') : null),
+      h('div', { class: 'row tight' },
+        hpBar(u.hp, u.maxHp), h('span', { class: 'num small' }, `${Math.max(0, u.hp)}/${u.maxHp}`),
+        u.cs !== null && !u.csShared ? h('span', { class: 'pill cs', title: '令呪' }, `令呪 ${u.cs}`) : null,
+        u.cs !== null && u.csShared ? h('span', { class: 'small muted', title: 'マスターの令呪を使う' }, `令呪 ${u.cs}（マスター）`) : null,
+        res,
+        u.ex ? h('span', { class: 'pill skill', title: 'この交戦フェイズのEX振り直し' }, `EX ${u.ex.left}/${u.ex.max}`) : null),
+      u.states.length ? h('div', { class: 'row tight' }, u.states.map((s) => h('span', { class: 'pill buff' }, s))) : null);
+  }
+  function playGroupRow(g) {
+    const alive = g.list.filter((u) => u.alive);
+    const hp = alive.reduce((a, u) => a + u.hp, 0), max = g.list.reduce((a, u) => a + u.maxHp, 0);
+    return h('div', { class: 'play-unit' + (alive.length ? '' : ' down') },
+      h('div', { class: 'row tight' }, h('span', { class: 'nm' }, `${g.name} ×${alive.length}`), h('span', { class: 'small muted' }, `（召喚 ${g.list.length}体）`)),
+      h('div', { class: 'row tight' }, hpBar(hp, max), h('span', { class: 'num small' }, `HP計 ${hp}/${max}`)));
+  }
+
+  function playResultCard(R) {
+    return h('section', { class: 'panel stack play-decision done', 'aria-live': 'polite' },
+      h('h3', null, R.winner >= 0 ? `勝者：${R.winnerName}` : '引き分け'),
+      h('p', { class: 'small muted' }, '「一手戻す」で直前の判断からやり直せます。'),
+      h('div', { class: 'row' }, btn('同じダイスで最初から', () => { playState().choices = []; save(); playStep(); render(); }, 'sm'), btn('新しいダイスで', () => playStart(true), 'sm primary')));
+  }
+
+  function playDecision(q) {
+    const card = h('section', { class: 'panel stack play-decision', 'aria-live': 'polite', style: { '--tc': teamColor(q.team) } });
+    card.append(h('div', { class: 'row tight' }, h('span', { class: 'team-dot', style: { background: teamColor(q.team) } }), h('span', { class: 'small muted' }, q.teamName)));
+    card.append(h('h3', null, q.title));
+    if (q.detail) card.append(h('p', { class: 'small muted' }, q.detail));
+    if (q.kind === 'action') { card.append(playActionForm(q)); return card; }
+    const list = h('div', { class: 'play-options' });
+    for (const o of q.options) {
+      const rec = o.id === q.ai;
+      list.append(h('button', { type: 'button', class: 'play-option' + (rec ? ' rec' : ''), disabled: o.disabled ? true : null, onclick: () => playChoose(o.id) },
+        h('span', { class: 'lbl' }, o.label), o.note ? h('span', { class: 'note' }, o.note) : null, rec ? h('span', { class: 'rec-tag' }, 'AIのおすすめ') : null));
+    }
+    card.append(list);
+    return card;
+  }
+
+  function playActionForm(q) {
+    const key = playState().choices.length;
+    // 同名のユニット（王の軍勢など）はまとめて人数で選ぶ
+    const groups = [];
+    for (const u of q.units) {
+      let g = groups.find((x) => x.name === u.name);
+      if (!g) { g = { name: u.name, ids: [], types: u.types }; groups.push(g); }
+      g.ids.push(u.id);
+    }
+    const groupOf = (id) => groups.find((g) => g.ids.includes(id));
+    if (!UI.playForm || UI.playForm.key !== key) {
+      const ai = q.ai;
+      const sup = {};
+      for (const id of ai.sup || []) { const g = groupOf(id); if (g) sup[g.name] = (sup[g.name] || 0) + 1; }
+      UI.playForm = { key, actor: (groupOf(ai.actor) || groups[0]).name, type: ai.type, target: ai.target, sup, dirty: false };
+    }
+    const F = UI.playForm;
+    const actorG = groups.find((g) => g.name === F.actor) || groups[0];
+    if (!actorG.types.some((t) => t.key === F.type)) F.type = actorG.types[0] && actorG.types[0].key;
+    const planOf = () => {
+      if (!F.dirty) return q.ai;
+      const actor = actorG.ids[0];
+      const sup = [];
+      for (const g of groups) {
+        const n = Math.max(0, Math.floor(+F.sup[g.name] || 0));
+        sup.push(...g.ids.filter((id) => id !== actor).slice(0, n));
+      }
+      return { actor, type: F.type, target: F.target, sup };
+    };
+    const touch = () => { F.dirty = true; render(); };
+    const wrap = h('div', { class: 'stack', style: { gap: '10px' } });
+    const radios = (name, items, cur, onPick) => h('div', { class: 'play-radios', role: 'radiogroup', 'aria-label': name },
+      items.map(([v, label, sub]) => h('button', { type: 'button', role: 'radio', 'aria-checked': v === cur ? 'true' : 'false', onclick: () => onPick(v) }, label, sub ? h('span', { class: 'sub' }, sub) : null)));
+    wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, '行動するキャラ'),
+      radios('行動するキャラ', groups.map((g) => [g.name, g.ids.length > 1 ? `${g.name} ×${g.ids.length}` : g.name]), actorG.name, (v) => { F.actor = v; delete F.sup[v]; touch(); })));
+    wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, '攻撃の種類'),
+      radios('攻撃の種類', actorG.types.map((t) => [t.key, t.name + '攻撃']), F.type, (v) => { F.type = v; touch(); })));
+    wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, '対象'),
+      radios('対象', q.targets.map((t) => [t.id, t.name, `HP ${t.hp}/${t.maxHp}`]), F.target, (v) => { F.target = v; touch(); })));
+    const others = groups.map((g) => ({ g, max: g.ids.filter((id) => id !== actorG.ids[0]).length })).filter((x) => x.max > 0);
+    if (q.support && others.length) {
+      const sb = h('div', { class: 'play-sup' });
+      for (const { g, max } of others) {
+        const cur = Math.min(max, +F.sup[g.name] || 0);
+        if (max === 1) {
+          const c = h('input', { type: 'checkbox', checked: cur > 0 });
+          c.addEventListener('change', () => { F.sup[g.name] = c.checked ? 1 : 0; touch(); });
+          sb.append(h('label', { class: 'check' }, c, g.name));
+        } else {
+          const n = h('input', { type: 'number', min: 0, max, value: cur, class: 'w-num', 'aria-label': g.name + 'の援護の人数' });
+          n.addEventListener('change', () => { F.sup[g.name] = Math.max(0, Math.min(max, Math.floor(+n.value || 0))); touch(); });
+          sb.append(h('label', { class: 'check' }, g.name, n, h('span', { class: 'small muted' }, `/ ${max}体`)));
+        }
+      }
+      wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, '援護（援護した味方はこの手番の行動を使います）'), sb));
+    }
+    const plan = planOf();
+    let est = null;
+    try { est = q.estimate(plan); } catch (e) { est = null; }
+    wrap.append(h('div', { class: 'play-est' }, est
+      ? [h('span', null, '期待ダメージ ', h('strong', { class: 'num' }, est.E.toFixed(1))), h('span', null, '撃破率 ', h('strong', { class: 'num' }, Math.round(est.killP * 100) + '%')),
+        est.support ? h('span', { class: 'small muted' }, `援護 +${est.support}`) : null, est.aoe ? h('span', { class: 'small muted' }, '敵前衛全員への攻撃になります') : null]
+      : h('span', { class: 'small muted' }, 'この組み合わせでは攻撃できません')));
+    wrap.append(h('div', { class: 'row' },
+      btn(F.dirty ? 'この内容で攻撃' : 'この内容で攻撃（AIのおすすめ）', () => playChoose(planOf()), 'primary', { disabled: est ? null : true }),
+      F.dirty ? btn('AIのおすすめに戻す', () => { UI.playForm = null; render(); }, 'sm') : null,
+      h('span', { class: 'spacer' }),
+      btn('手番を終える', () => playChoose({ pass: true }), 'ghost sm', { title: 'この手番の残りの行動をしない' })));
+    return wrap;
+  }
+
+  function playLog(lines) {
+    const prev = Math.min(UI.playPrevLog || 0, lines.length);
+    const box = h('div', { class: 'play-log', role: 'log', 'aria-label': '戦闘ログ' },
+      lines.map((l, i) => h('div', { class: (/^――/.test(l) ? 'hd' : /^\[巡/.test(l) ? 'rd' : '') + (i >= prev ? ' new' : '') }, l)));
+    requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+    return h('details', { class: 'log', open: true }, h('summary', null, `戦闘ログ（${lines.length}行）`), box);
+  }
+
+  // ------------------------------------------------------------------
   // 使い方
   // ------------------------------------------------------------------
   function renderHelp() {
@@ -1665,6 +1945,7 @@
         h('li', null, '「テスト実行」でテストケースを選び、陣営にキャラクターを配置します（前衛・後衛、倒れたら負けになる「要」）。'),
         h('li', null, '試行回数とシードを決めて「シミュレーション実行」。勝率、巡数の分布、キャラ別の死亡率・ダメージ、スキルの使用回数、詳細ログが出ます。'),
         h('li', null, '数値を変えて再実行し、「比較用に保存」で案同士を並べます。'),
+        h('li', null, '「手動プレイ」で、テストケースの陣営を自分で操作して1戦できます（片方だけでも両方でも）。行動・援護・宝具などの回数制限スキル・攻撃対象の変更・令呪・EX振り直しを選べ、場面ごとにAIのおすすめと期待ダメージ・撃破率の目安を表示します。同じシードなら同じダイスなので、「一手戻す」で別の選択を試せます。'),
         h('li', null, '「比較・スイープ・総当たり」で、HPや補正値を範囲で動かした勝率曲線や、キャラ同士の相性表を作れます。総当たりは援護・乗騎・召喚・宝具・令呪・陣地・同盟の有り無しを切り替えて、どの要因で勝率が動くかを比べられます。')),
       h('h3', null, '用語と再現している範囲'),
       h('p', null, 'ターン＝移動・遭遇・交戦の全フェイズの一巡り、フェイズ＝移動・遭遇・交戦それぞれ、巡＝交戦フェイズ内の手番の一巡り。シミュレーターは各ターンの交戦フェイズだけを戦わせます。決着しなければ次のターンの交戦フェイズへ進み、その間の移動フェイズの効果（被虐の誉れの回復など）だけを処理します。'),
@@ -2028,7 +2309,7 @@
     datalists();
     const app = $('#app');
     resultsEl = null; runBarEl = null;
-    const view = { test: renderTest, chars: renderChars, states: renderStates, rules: renderRules, lab: renderLab, help: renderHelp }[UI.tab] || renderTest;
+    const view = { test: renderTest, play: renderPlay, chars: renderChars, states: renderStates, rules: renderRules, lab: renderLab, help: renderHelp }[UI.tab] || renderTest;
     const node = view();
     app.replaceChildren(node);
     const dlg = importDialog();

@@ -467,9 +467,68 @@
   function log(B, msg) { if (B.log) B.log.push(msg); }
 
   // ------------------------------------------------------------------
-  // AI：限定スキルを使うか
+  // 手動操作：判断が必要な場面で止める
+  //   B.manual = { teams: { [陣営番号]: { cs: 'self'|'ai', ex: 'self'|'ai' } }, choices: [...], pos }
+  //   記録済みの選択があればそれを返し、なければ質問を投げて止める（呼び出し側は同じシードで最初から再実行）
   // ------------------------------------------------------------------
-  function aiWants(B, inst, info) {
+  function manualTeam(B, ti) { return B.manual && B.manual.teams ? B.manual.teams[ti] || null : null; }
+  function csManual(B, ti) { const m = manualTeam(B, ti); return !!m && m.cs !== 'ai'; }
+  function exManual(B, ti) { const m = manualTeam(B, ti); return !!m && m.ex !== 'ai'; }
+  function decide(B, ti, q) {
+    if (!manualTeam(B, ti)) return q.ai;
+    const M = B.manual;
+    if (M.pos < M.choices.length) {
+      const c = M.choices[M.pos++];
+      if (q.kind !== 'action' && !q.options.some((o) => o.id === c && !o.disabled)) throw new Error('記録した選択を再現できませんでした（' + q.title + '）');
+      return c;
+    }
+    q.team = ti; q.teamName = B.teams[ti].name;
+    const e = new Error('decision');
+    e.isDecision = true; e.q = q; e.log = B.log ? B.log.slice() : []; e.view = battleView(B); e.B = B;
+    throw e;
+  }
+  const yesNo = (yesLabel, noLabel) => [{ id: 'yes', label: yesLabel || '使う' }, { id: 'no', label: noLabel || '使わない' }];
+  const pctText = (p) => Math.round(p * 100) + '%';
+
+  /** 画面表示用の戦況 */
+  function battleView(B) {
+    return {
+      engagement: B.engagement, round: B.round,
+      teams: B.teams.map((t) => ({
+        idx: t.idx, name: t.name, out: t.out, manual: !!manualTeam(B, t.idx), flags: [...t.flags],
+        units: t.units.map((u) => {
+          const h = isServantUnit(B, u) ? csHolder(B, u) : (isMasterUnit(B, u) ? masterHolder(B, u) : null);
+          return {
+            id: u.id, name: u.name, hp: u.hp, maxHp: u.maxHp, alive: u.alive, pos: u.pos, summoned: u.summoned, master: isMasterUnit(B, u),
+            cs: h ? csCount(h) : null, csShared: !!(h && h.unit !== u),
+            res: Object.keys(u.resMax).filter((k) => k !== 'cs').map((k) => ({ key: k, now: u.res[k] || 0, max: u.resMax[k] })),
+            ex: u.exMax ? { left: u.exLeft, max: u.exMax } : null,
+            states: u.insts.filter((i) => i.isState).map((i) => i.def.name + (i.def.duration === 'rounds' && i.turnsLeft ? `（残り${i.turnsLeft}巡）` : '')),
+          };
+        }),
+      })),
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // AI：限定スキルを使うか（手動の陣営なら使うかどうかを尋ねる）
+  // ------------------------------------------------------------------
+  function aiWants(B, inst, info, where) {
+    const ai = aiWantsAuto(B, inst, info);
+    if (!manualTeam(B, inst.owner.team) || !isLimited(inst)) return ai;
+    const d = inst.def;
+    const left = [];
+    if (d.resource && d.resource.key) left.push(`${d.resource.key} 残り${inst.owner.res[d.resource.key] || 0}`);
+    if (d.uses && +d.uses.max > 0) left.push(`回数 残り${+d.uses.max - (inst.used[d.uses.per || 'battle'] || 0)}`);
+    if (inst.charges !== null) left.push(`残り${inst.charges}回`);
+    const c = decide(B, inst.owner.team, {
+      kind: 'skill', title: `${inst.owner.name}「${d.name}」を使う？`,
+      detail: [where, d.note, left.join('・')].filter(Boolean).join('　'),
+      options: yesNo(), ai: ai ? 'yes' : 'no',
+    });
+    return c === 'yes';
+  }
+  function aiWantsAuto(B, inst, info) {
     if (!isLimited(inst)) return true;
     const ai = inst.def.ai || { policy: 'asap' };
     const thr = ai.threshold === undefined || ai.threshold === '' ? 50 : +ai.threshold;
@@ -554,7 +613,8 @@
           if (rk && chosen.some((x) => x.inst.owner === c.inst.owner && x.inst.def.resource && x.inst.def.resource.key === rk)) continue;
         } else {
           const info = buildAiInfo(B, P, roller, timing, ctx, c, chosen);
-          if (!aiWants(B, c.inst, info)) continue;
+          const where = `${TIMING_LABEL[timing] || timing}${ctx.opp ? '（相手：' + ctx.opp.name + '）' : ''}${roller !== c.owner ? '・判定するのは' + roller.name : ''}`;
+          if (!aiWants(B, c.inst, info, where)) continue;
         }
       }
       chosen.push(c);
@@ -703,7 +763,15 @@
     let exUsed = false;
     if (u.exLeft > 0 && B.rules.exRerolls !== false) {
       const sd = Math.sqrt(best.var);
-      if (value < best.mean - 0.5 * sd) {
+      let want = value < best.mean - 0.5 * sd;
+      if (exManual(B, u.team)) {
+        want = decide(B, u.team, {
+          kind: 'ex', title: `${u.name}：EXランクで振り直す？`,
+          detail: `${P.timing === 'attack' ? '攻撃' : P.timing === 'defend' ? '防御' : P.timing === 'initiative' ? '先手判定' : '判定'}の出目 ${value}（${best.count}D${best.faces}、平均 ${best.mean.toFixed(1)}）。この交戦フェイズの残り ${u.exLeft}回`,
+          options: yesNo('振り直す', 'このまま'), ai: want ? 'yes' : 'no',
+        }) === 'yes';
+      }
+      if (want) {
         u.exLeft--; exUsed = true;
         value = rollDice(B, best.count, best.faces);
       }
@@ -811,16 +879,32 @@
       }
       const missing = u.maxHp - u.hp;
       const danger = u.hp <= risk;
-      if (danger && missing >= 15 && csAllow(B, u, h, 1, u.hp <= risk * 0.6)) {
-        csSpend(B, h, 1, 'HP30回復', u);
-        const before = u.hp; u.hp = Math.min(u.maxHp, u.hp + 30); u.healed += u.hp - before;
+      const heal = () => { csSpend(B, h, 1, 'HP30回復', u); const before = u.hp; u.hp = Math.min(u.maxHp, u.hp + 30); u.healed += u.hp - before; };
+      const spentOf = () => Object.keys(u.resMax).filter((k) => /^np/.test(k) && u.resMax[k] > 0 && (u.res[k] || 0) < u.resMax[k]);
+      const restore = (k) => { csSpend(B, h, 2, '宝具回数1回復', u); u.res[k] = (u.res[k] || 0) + 1; };
+      if (csManual(B, u.team)) {
+        // 手動：使えるものがある間は尋ねる（「使わない」で次へ）
+        for (let g = 0; g < 6; g++) {
+          const spent = spentOf();
+          const opts = [{ id: 'none', label: '使わない' }];
+          if (u.hp < u.maxHp && csCount(h) >= 1) opts.push({ id: 'heal', label: `HP30回復（1画）`, note: `HP ${u.hp} → ${Math.min(u.maxHp, u.hp + 30)}／${u.maxHp}` });
+          for (const k of spent) if (csCount(h) >= 2) opts.push({ id: 'np:' + k, label: `宝具回数1回復（2画）`, note: `${k} ${u.res[k] || 0} → ${(u.res[k] || 0) + 1}` });
+          if (opts.length === 1) break;
+          const aiPick = g === 0 && danger && missing >= 15 && csAllow(B, u, h, 1, u.hp <= risk * 0.6) ? 'heal'
+            : g === 0 && spent.length && csAllow(B, u, h, 2, false) && (B.teams[u.team].csAI === 'aggressive' || csCount(h) >= 3) ? 'np:' + spent[0] : 'none';
+          const c = decide(B, u.team, {
+            kind: 'cs', title: `${u.name}：手番開始時に令呪を使う？`,
+            detail: `令呪 残り${csCount(h)}画。次の自分の手番までに受けうるダメージの目安 ${Math.round(risk)}（HP ${u.hp}）`,
+            options: opts, ai: opts.some((o) => o.id === aiPick) ? aiPick : 'none',
+          });
+          if (c === 'none') break;
+          if (c === 'heal') heal(); else restore(c.slice(3));
+        }
         continue;
       }
-      const spent = Object.keys(u.resMax).filter((k) => /^np/.test(k) && u.resMax[k] > 0 && (u.res[k] || 0) < u.resMax[k]);
-      if (spent.length && csAllow(B, u, h, 2, false) && (B.teams[u.team].csAI === 'aggressive' || csCount(h) >= 3)) {
-        csSpend(B, h, 2, '宝具回数1回復', u);
-        u.res[spent[0]] = (u.res[spent[0]] || 0) + 1;
-      }
+      if (danger && missing >= 15 && csAllow(B, u, h, 1, u.hp <= risk * 0.6)) { heal(); continue; }
+      const spent = spentOf();
+      if (spent.length && csAllow(B, u, h, 2, false) && (B.teams[u.team].csAI === 'aggressive' || csCount(h) >= 3)) restore(spent[0]);
     }
   }
   /** マスターが狙われた時、自分のサーヴァントへ攻撃対象を変更 */
@@ -831,10 +915,17 @@
     const h = csHolder(B, sv);
     if (!h) return target;
     const qm = quickDamage(B, attacker, typeKey, target);
-    if (qm.killP < 0.3 && qm.E < target.hp * 0.5) return target;
     const qs = quickDamage(B, attacker, typeKey, sv);
-    if (sv.hp - qs.E <= 0 && qs.killP > 0.6) return target;
-    if (!csAllow(B, sv, h, 1, true)) return target;
+    const aiYes = !(qm.killP < 0.3 && qm.E < target.hp * 0.5) && !(sv.hp - qs.E <= 0 && qs.killP > 0.6) && csAllow(B, sv, h, 1, true);
+    if (csManual(B, sv.team)) {
+      if (csCount(h) < 1) return target;
+      const c = decide(B, sv.team, {
+        kind: 'cs', title: `${attacker.name} が ${target.name} を狙っている：令呪で ${sv.name} に攻撃対象を変更する？`,
+        detail: `令呪 残り${csCount(h)}画。${target.name}：期待ダメージ ${qm.E.toFixed(1)}・脱落率 ${pctText(qm.killP)}／${sv.name}：期待ダメージ ${qs.E.toFixed(1)}・脱落率 ${pctText(qs.killP)}`,
+        options: yesNo('変更する（1画）', 'しない'), ai: aiYes ? 'yes' : 'no',
+      });
+      if (c !== 'yes') return target;
+    } else if (!aiYes) return target;
     csSpend(B, h, 1, '攻撃対象をサーヴァントに変更', sv);
     return sv;
   }
@@ -1131,7 +1222,7 @@
       if (!canUse(inst)) continue;
       const hasEffects = bl.some((b) => (b.effects || []).some((e) => EFFECT_TYPES[e.type] && EFFECT_TYPES[e.type].phase === 'other'));
       if (!hasEffects) continue;
-      if (isLimited(inst) && !aiWants(B, inst, opts && opts.aiInfo ? opts.aiInfo(inst, bl) : { subject: subjectFor(B, u, bl) })) continue;
+      if (isLimited(inst) && !aiWants(B, inst, opts && opts.aiInfo ? opts.aiInfo(inst, bl) : { subject: subjectFor(B, u, bl) }, TIMING_LABEL[timing] || timing)) continue;
       const freeTiming = timing === 'battleStart';
       if (!freeTiming && (isLimited(inst) || inst.charges !== null)) consume(B, inst);
       if (timing !== 'battleStart') log(B, `　${u.name}「${inst.def.name}」発動`);
@@ -1339,8 +1430,39 @@
         }
       }
     }
-    if (!best) return { target, post: null };
-    if (isLimited(best.inst) && !aiWants(B, best.inst, { subject: target })) return { target, post: null };
+    if (manualTeam(B, target.team)) {
+      // 手動：変更できる候補をすべて示す
+      const opts = [{ id: 'none', label: `変更しない（${target.name} が受ける）`, note: `期待ダメージ ${baseQ.E.toFixed(1)}・脱落率 ${pctText(baseQ.killP)}` }];
+      const cands = new Map();
+      for (const c of team.units) {
+        if (!c.alive || c.pos !== 'front') continue;
+        for (const inst of c.insts) {
+          const bl = matchBlocks(B, inst, 'allyAttacked', { opp: attacker, type: typeKey }, c);
+          const effs = [];
+          for (const b of bl) for (const e of b.effects || []) if (e.type === 'redirect') effs.push(e);
+          if (!effs.length || !canUse(inst)) continue;
+          for (const d of redirectDests(B, c, effs)) {
+            if (d === target) continue;
+            const id = c.id + '|' + inst.def.name + '|' + d.id;
+            if (cands.has(id)) continue;
+            const q = qd(d);
+            cands.set(id, { unit: c, dest: d, inst, blocks: bl });
+            opts.push({ id, label: `${c.name}「${inst.def.name}」→ ${d === c ? '自分' : d.name}`, note: `期待ダメージ ${q.E.toFixed(1)}・脱落率 ${pctText(q.killP)}${isLimited(inst) ? '（回数を消費）' : ''}` });
+          }
+        }
+      }
+      if (opts.length === 1) return { target, post: null };
+      const aiId = best ? best.unit.id + '|' + best.inst.def.name + '|' + best.dest.id : 'none';
+      const c = decide(B, target.team, {
+        kind: 'redirect', title: `${attacker.name} の${attackTypeDef(B, typeKey).name}攻撃が ${target.name} に：攻撃対象を変更する？`,
+        detail: '', options: opts, ai: cands.has(aiId) ? aiId : 'none',
+      });
+      if (c === 'none') return { target, post: null };
+      best = cands.get(c);
+    } else {
+      if (!best) return { target, post: null };
+      if (isLimited(best.inst) && !aiWants(B, best.inst, { subject: target })) return { target, post: null };
+    }
     if (isLimited(best.inst) || best.inst.charges !== null) consume(B, best.inst);
     log(B, best.dest === best.unit
       ? `　${best.unit.name}「${best.inst.def.name}」で攻撃対象を自分に変更`
@@ -1400,6 +1522,7 @@
     const t0 = !A.aoe ? targets[0] : null;
     // 戦闘続行などで耐えられる相手でも、致死量を通せば耐える手段を使わせられるので同じ基準で使う
     const hAtk = t0 && !t0.summoned && !t0.tags.has('乗騎') ? csHolder(B, attacker) : null;
+    const atkManual = csManual(B, attacker.team);
     if (hAtk) {
       const D0 = prepareRoll(B, t0, 'defend', { type: typeKey, opp: attacker, dry: true, negate: A.negate });
       const de = rollEstimate(B, t0, D0, A.defStat || T.defStat);
@@ -1411,11 +1534,26 @@
       const pPlan = p0 + (1 - p0) * (pR >= th.min ? pR : 0); // 外れたら振り直す前提
       const pre = bestCsPre(B, attacker, A, T.atkStat, pKill);
       csAtk = { de, needDmg, th, p0 };
-      if (pre && pre.p > pPlan && pre.p - p0 >= th.gain && pre.p >= th.min
-        && csAllow(B, attacker, hAtk, 1, pre.p >= 0.6 && lastEnemyServant(B, t0))) {
-        csSpend(B, hAtk, 1, CS_PRE_LABEL[pre.kind] + '（攻撃）', attacker);
-        applyCsPre(A, pre.kind);
-        csAtk.used = pre.kind;
+      const aiPre = pre && pre.p > pPlan && pre.p - p0 >= th.gain && pre.p >= th.min
+        && csAllow(B, attacker, hAtk, 1, pre.p >= 0.6 && lastEnemyServant(B, t0));
+      let pick = aiPre ? pre.kind : 'none';
+      if (atkManual && csCount(hAtk) >= 1) {
+        const pk = (k) => pKill(csPreDist(B, attacker, A, T.atkStat, k));
+        pick = decide(B, attacker.team, {
+          kind: 'cs', title: `${attacker.name} → ${t0.name}：攻撃の判定の前に令呪を使う？`,
+          detail: `令呪 残り${csCount(hAtk)}画。撃破率の目安：そのまま ${pctText(p0)}（外れたら振り直し+3なら ${pctText(pPlan)}）`,
+          options: [
+            { id: 'none', label: '使わない' },
+            { id: 'plus5', label: '判定に5までの補正値（1画）', note: `撃破率 ${pctText(pk('plus5'))}` },
+            { id: 'face1', label: 'ダイス面数+1（1画）', note: `撃破率 ${pctText(pk('face1'))}` },
+          ],
+          ai: pick,
+        });
+      }
+      if (pick !== 'none') {
+        csSpend(B, hAtk, 1, CS_PRE_LABEL[pick] + '（攻撃）', attacker);
+        applyCsPre(A, pick);
+        csAtk.used = pick;
       }
     }
     const atk = executeRoll(B, attacker, A, T.atkStat);
@@ -1425,7 +1563,15 @@
       const pNow = pAtLeast(atk.value - de.mean, de.var, needDmg);
       const x = rerollPlus3(B, atk);
       const pR = pAtLeast(x.mean - de.mean, x.sd * x.sd + de.var, needDmg);
-      if (pR - pNow >= th.gain && pR >= th.min && csAllow(B, attacker, csHolder(B, attacker), 1, pR >= 0.6 && lastEnemyServant(B, t0))) {
+      let yes = pR - pNow >= th.gain && pR >= th.min && csAllow(B, attacker, csHolder(B, attacker), 1, pR >= 0.6 && lastEnemyServant(B, t0));
+      if (atkManual && csCount(csHolder(B, attacker)) >= 1 && pNow < 0.95) {
+        yes = decide(B, attacker.team, {
+          kind: 'cs', title: `${attacker.name} の攻撃の出目は ${atk.value}（${atk.count}D${atk.faces}）：令呪で振り直す？`,
+          detail: `令呪 残り${csCount(csHolder(B, attacker))}画。${t0.name}（HP ${t0.hp}）の撃破率の目安：このまま ${pctText(pNow)}／振り直し+3 ${pctText(pR)}（振り直すと出目は新しい値になる）`,
+          options: yesNo('振り直す+3（1画）', 'このまま'), ai: yes ? 'yes' : 'no',
+        }) === 'yes';
+      }
+      if (yes) {
         csSpend(B, csHolder(B, attacker), 1, '振り直し+3（攻撃）', attacker);
         doCsReroll(B, atk);
       }
@@ -1450,7 +1596,15 @@
       if (mh) {
         const de = rollEstimate(B, t, D, defStat);
         const eDmg = Math.max(0, atk.value - de.mean) / (half ? 2 : 1);
-        if (eDmg >= t.hp && csAllow(B, t, mh, 1, true)) { csSpend(B, mh, 1, 'マスターの判定+5', t); D.upTo.push(5); }
+        let yes = eDmg >= t.hp && csAllow(B, t, mh, 1, true);
+        if (csManual(B, t.team) && csCount(mh) >= 1 && eDmg > 0) {
+          yes = decide(B, t.team, {
+            kind: 'cs', title: `${t.name}（マスター）：攻撃 ${atk.value} を受ける。令呪で防御に5までの補正値？`,
+            detail: `令呪 残り${csCount(mh)}画。期待ダメージ ${eDmg.toFixed(1)}（HP ${t.hp}）`,
+            options: yesNo('使う（1画）', '使わない'), ai: yes ? 'yes' : 'no',
+          }) === 'yes';
+        }
+        if (yes) { csSpend(B, mh, 1, 'マスターの判定+5', t); D.upTo.push(5); }
       }
       // 令呪（サーヴァント用）：このままでは致命傷になりやすく、判定前の上乗せの方が「外れたら振り直す」より生き残りやすい時
       let csDefNote = null;
@@ -1463,10 +1617,24 @@
           const pR = pSurv(csPreDist(B, t, D, defStat, 'plus3'));
           const pPlan = p0 + (1 - p0) * (pR >= 0.3 ? pR : 0);
           const pre = bestCsPre(B, t, D, defStat, pSurv);
-          if (pre && pre.p > pPlan + 0.02 && pre.p >= 0.3 && csAllow(B, t, hd, 1, true)) {
-            csSpend(B, hd, 1, CS_PRE_LABEL[pre.kind] + '（防御）', t);
-            applyCsPre(D, pre.kind);
-            csDefNote = pre.kind === 'plus5' ? '令呪+5' : '令呪で面数+1';
+          let pick = pre && pre.p > pPlan + 0.02 && pre.p >= 0.3 && csAllow(B, t, hd, 1, true) ? pre.kind : 'none';
+          if (csManual(B, t.team) && csCount(hd) >= 1) {
+            const ps = (k) => pSurv(csPreDist(B, t, D, defStat, k));
+            pick = decide(B, t.team, {
+              kind: 'cs', title: `${t.name}：攻撃 ${atk.value} を受ける。防御の判定の前に令呪を使う？`,
+              detail: `令呪 残り${csCount(hd)}画。生き残る確率の目安：そのまま ${pctText(p0)}（致命傷なら振り直し+3で ${pctText(pPlan)}）`,
+              options: [
+                { id: 'none', label: '使わない' },
+                { id: 'plus5', label: '判定に5までの補正値（1画）', note: `生存率 ${pctText(ps('plus5'))}` },
+                { id: 'face1', label: 'ダイス面数+1（1画）', note: `生存率 ${pctText(ps('face1'))}` },
+              ],
+              ai: pick,
+            });
+          }
+          if (pick !== 'none') {
+            csSpend(B, hd, 1, CS_PRE_LABEL[pick] + '（防御）', t);
+            applyCsPre(D, pick);
+            csDefNote = pick === 'plus5' ? '令呪+5' : '令呪で面数+1';
           }
         }
       }
@@ -1480,7 +1648,15 @@
           const x = rerollPlus3(B, def);
           const need = atk.value - t.hp * (half ? 2 : 1) + 1;
           const pSurvive = x.sd > 0 ? 1 - Phi((need - 0.5 - x.mean) / x.sd) : (x.mean >= need ? 1 : 0);
-          if (pSurvive >= 0.3 && csAllow(B, t, h, 1, true)) { csSpend(B, h, 1, '振り直し+3（防御）', t); doCsReroll(B, def); }
+          let yes = pSurvive >= 0.3 && csAllow(B, t, h, 1, true);
+          if (csManual(B, t.team) && csCount(h) >= 1) {
+            yes = decide(B, t.team, {
+              kind: 'cs', title: `${t.name} の防御の出目は ${def.value}：このままだと致命傷（攻撃 ${atk.value}・HP ${t.hp}）。令呪で振り直す？`,
+              detail: `令呪 残り${csCount(h)}画。振り直し+3で生き残る確率の目安 ${pctText(pSurvive)}`,
+              options: yesNo('振り直す+3（1画）', 'このまま'), ai: yes ? 'yes' : 'no',
+            }) === 'yes';
+          }
+          if (yes) { csSpend(B, h, 1, '振り直し+3（防御）', t); doCsReroll(B, def); }
         }
       }
       let dmg = Math.max(0, atk.value - def.value);
@@ -1516,7 +1692,7 @@
     for (const inst of u.insts) {
       const bl = matchBlocks(B, inst, 'action', {}, u);
       if (!bl.length || !canUse(inst)) continue;
-      if (!aiWants(B, inst, { subject: subjectFor(B, u, bl) })) continue;
+      if (!aiWants(B, inst, { subject: subjectFor(B, u, bl) }, '行動として使う（攻撃の代わり）')) continue;
       if (isLimited(inst) || inst.charges !== null) consume(B, inst);
       log(B, `${u.name}「${inst.def.name}」を使用（行動）`);
       for (const b of bl) for (const e of b.effects || []) if (EFFECT_TYPES[e.type] && EFFECT_TYPES[e.type].phase === 'other') runEffect(B, u, e, { actor: u, target: null, event: {} });
@@ -1543,7 +1719,8 @@
   function teamTurn(B, team) {
     if (team.out) return;
     B.turnSerial = (B.turnSerial || 0) + 1;
-    try { teamTurnBody(B, team); } finally { tickTurnStates(B, team); }
+    teamTurnBody(B, team);
+    tickTurnStates(B, team);
   }
 
   function teamTurnBody(B, team) {
@@ -1569,20 +1746,61 @@
       if (!bestSolo) break;
       let bestPlan = null;
       if (team.support !== false && pending.length >= 2) bestPlan = planSupport(B, pending, solos);
-      if (bestPlan) {
-        const sups = bestPlan.supporters.map((sp) => {
-          const sb = supportBonus(B, sp, bestPlan.type, bestPlan.c.target, false);
+      let plan = bestPlan
+        ? { actor: bestPlan.a.id, type: bestPlan.c.type, target: bestPlan.c.target.id, sup: bestPlan.supporters.map((x) => x.id) }
+        : { actor: bestSolo.u.id, type: bestSolo.c.type, target: bestSolo.c.target.id, sup: [] };
+      if (manualTeam(B, team.idx)) {
+        plan = decide(B, team.idx, actionQuestion(B, team, pending, plan));
+        if (!plan || plan.pass) break;
+      }
+      const actor = pending.find((u) => u.id === plan.actor);
+      const target = enemiesFront(B, actor || pending[0]).find((u) => u.id === plan.target);
+      const supporters = (plan.sup || []).map((id) => pending.find((u) => u.id === id)).filter((u) => u && u !== actor);
+      if (!actor || !target || !availableTypes(B, actor).some((t) => t.key === plan.type)) throw new Error('行動の選択を再現できませんでした');
+      if (supporters.length && team.support !== false) {
+        const sups = supporters.map((sp) => {
+          const sb = supportBonus(B, sp, plan.type, target, false);
           sp.actionsLeft--;
           return { unit: sp, value: sb.value, applied: sb.applied };
         });
-        performAttack(B, bestPlan.a, bestPlan.c.type, bestPlan.c.target, { list: sups, value: sups.reduce((x, y) => x + y.value, 0) });
-        bestPlan.a.actionsLeft--;
+        performAttack(B, actor, plan.type, target, { list: sups, value: sups.reduce((x, y) => x + y.value, 0) });
       } else {
-        performAttack(B, bestSolo.u, bestSolo.c.type, bestSolo.c.target, null);
-        bestSolo.u.actionsLeft--;
+        performAttack(B, actor, plan.type, target, null);
       }
+      actor.actionsLeft--;
       pending = pending.filter((u) => u.actionsLeft > 0);
     }
+  }
+
+  /** 手動の陣営の行動を尋ねる質問。estimate(plan) で選んだ内容の期待ダメージ・撃破率を返す */
+  function actionQuestion(B, team, pending, aiPlan) {
+    const enemyOf = (u) => enemiesFront(B, u);
+    return {
+      kind: 'action', title: `${team.name} の手番：行動を選んでください`,
+      detail: `${B.engagement}ターン目・${B.round}巡目`,
+      ai: aiPlan,
+      support: team.support !== false,
+      units: pending.map((u) => ({
+        id: u.id, name: u.name, actionsLeft: u.actionsLeft, summoned: u.summoned,
+        types: availableTypes(B, u).map((t) => ({ key: t.key, name: t.name })),
+      })),
+      targets: enemyOf(pending[0]).map((u) => ({ id: u.id, name: u.name, hp: u.hp, maxHp: u.maxHp, team: u.team })),
+      estimate(plan) {
+        const a = pending.find((u) => u.id === plan.actor);
+        const t = a && enemyOf(a).find((u) => u.id === plan.target);
+        if (!a || !t || !availableTypes(B, a).some((x) => x.key === plan.type)) return null;
+        let extra = 0;
+        const sups = [];
+        for (const id of plan.sup || []) {
+          const s = pending.find((u) => u.id === id);
+          if (!s || s === a) continue;
+          const v = supportBonus(B, s, plan.type, t, true).value;
+          extra += v; sups.push({ name: s.name, value: v });
+        }
+        const q = quickDamage(B, a, plan.type, t, undefined, extra);
+        return { E: q.E, killP: q.killP, aoe: q.aoe, support: extra, sups };
+      },
+    };
   }
 
   /**
@@ -1800,10 +2018,11 @@
     }
   }
 
-  function buildBattle(C, rng, logOn) {
+  function buildBattle(C, rng, logOn, manual) {
     const B = {
       C, rules: C.rules, rng, stateDefs: C.stateDefs, log: logOn ? [] : null, warn: new Set(),
       round: 0, totalRound: 0, engagement: 0, order: [], orderRank: {}, steals: {}, teams: [], uidSeq: 0, summonCount: {},
+      manual: manual || null,
     };
     B.scope = makeScope(B);
     C.teams.forEach((t, ti) => {
@@ -1836,8 +2055,8 @@
     return B;
   }
 
-  function runBattle(C, rng, logOn, hooks) {
-    const B = buildBattle(C, rng, logOn);
+  function runBattle(C, rng, logOn, hooks, manual) {
+    const B = buildBattle(C, rng, logOn, manual);
     B.hooks = hooks || null;
     if (logOn) {
       for (const t of B.teams) log(B, `【${t.name}】` + t.units.map((u) => `${u.name}（HP${u.maxHp}・${u.pos === 'front' ? '前衛' : '後衛'}）`).join('、'));
@@ -1847,6 +2066,21 @@
     B.winner = alive.length === 1 ? alive[0].idx : -1;
     log(B, B.winner >= 0 ? `勝者：${B.teams[B.winner].name}` : (alive.length === 0 ? '相打ち（引き分け）' : 'ターン数の上限に到達（引き分け）'));
     return B;
+  }
+
+  /**
+   * 手動プレイ：選択の記録 choices を最初から再生し、次に判断が必要な場面で止める。
+   * 戻り値 { done:false, q, log, view } または { done:true, winner, log, view }
+   */
+  function playManual(C, opts) {
+    const manual = { teams: opts.teams || {}, choices: (opts.choices || []).slice(), pos: 0 };
+    try {
+      const B = runBattle(C, mulberry32(seedFor(opts.seed === undefined ? 1 : opts.seed, 0)), true, null, manual);
+      return { done: true, winner: B.winner, winnerName: B.winner >= 0 ? B.teams[B.winner].name : null, log: B.log, view: battleView(B), warnings: [...B.warn] };
+    } catch (e) {
+      if (!e || !e.isDecision) throw e;
+      return { done: false, q: e.q, log: e.log, view: e.view, warnings: [...e.B.warn] };
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1966,7 +2200,7 @@
   const api = {
     TIMINGS, TIMING_LABEL, EFFECT_TYPES, TARGETS, FLAGS, AI_POLICIES, TARGET_POLICIES,
     rankInfo, heroPoints, csPlan, baseMaxHp, previewMaxHp, checkExpr,
-    compileScenario, runTrials, mergeAgg, summarize, simulate, runBattle, mulberry32, seedFor,
+    compileScenario, runTrials, mergeAgg, summarize, simulate, runBattle, playManual, mulberry32, seedFor,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TRPGEngine = api;

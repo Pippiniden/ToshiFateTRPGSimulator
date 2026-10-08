@@ -275,3 +275,54 @@ table.data.import-table td, table.data.import-table th { white-space: normal; ve
 table.data.import-table td:first-child { width: 7em; white-space: nowrap; }
 table.data.import-table td:nth-child(3) { width: 9.5em; }
 table.data.import-table td:last-child { width: 9.5em; }
+
+/* ---------- 手動プレイ ---------- */
+.play-wrap { max-width: 1280px; margin: 0 auto; }
+.play-setup { max-width: 760px; margin: 0 auto; }
+.play-team { border: 1px solid var(--line); border-left: 4px solid var(--tc); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); }
+.field.inline { flex-direction: row; align-items: center; gap: 6px; }
+.field.inline > select { width: auto; min-width: 9.5em; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r); overflow: hidden; }
+.seg > button { border: 0; background: var(--surface); padding: 5px 14px; cursor: pointer; font-size: .86rem; }
+.seg > button + button { border-left: 1px solid var(--line-strong); }
+.seg > button[aria-checked="true"] { background: var(--fg); color: var(--surface); font-weight: 700; }
+.play-head { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.play-layout { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); grid-template-areas: "board dec" "board log"; grid-template-rows: auto 1fr; gap: 16px; align-items: start; }
+.pa-board { grid-area: board; position: sticky; top: 76px; }
+.pa-dec { grid-area: dec; }
+.pa-log { grid-area: log; }
+@media (max-width: 900px) {
+  .play-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "dec" "board" "log"; grid-template-rows: auto; }
+  .pa-board { position: static; }
+}
+input.w-seed { width: 160px; }
+.play-teambox { border-left: 3px solid var(--tc); padding-left: 10px; display: flex; flex-direction: column; gap: 6px; }
+.play-unit { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: var(--r); background: var(--surface-2); }
+.play-unit .nm { font-weight: 700; }
+.play-unit.down { opacity: .5; }
+.play-unit.down .nm { text-decoration: line-through; }
+.hpbar { display: inline-block; width: 110px; height: 8px; border-radius: 9px; background: var(--sunken); overflow: hidden; }
+.hpbar > i { display: block; height: 100%; }
+.play-decision { border-left: 4px solid var(--tc, var(--accent)); box-shadow: 0 1px 0 var(--line), 0 6px 18px -12px rgba(0,0,0,.35); }
+.play-decision.done { border-left-color: var(--accent); }
+.play-decision h3 { font-family: var(--font-display); font-size: 1.12rem; font-weight: 800; }
+.play-options { display: flex; flex-direction: column; gap: 6px; }
+.play-option { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); cursor: pointer; }
+.play-option:hover { background: var(--surface-2); border-color: var(--fg); }
+.play-option .lbl { font-weight: 700; }
+.play-option .note { font-size: .8rem; color: var(--muted); }
+.play-option.rec { border-color: var(--accent); background: color-mix(in oklab, var(--accent-soft) 55%, var(--surface)); padding-right: 104px; }
+.rec-tag { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: .72rem; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 8px; background: var(--surface); }
+.play-radios { display: flex; flex-wrap: wrap; gap: 6px; }
+.play-radios > button { display: inline-flex; flex-direction: column; align-items: flex-start; padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); cursor: pointer; font-size: .88rem; }
+.play-radios > button .sub { font-size: .74rem; color: var(--muted); font-family: var(--font-mono); }
+.play-radios > button[aria-checked="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg); font-weight: 700; }
+.play-radios > button[aria-checked="true"] .sub { color: inherit; opacity: .8; }
+.play-sup { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.play-sup input.w-num { width: 64px; }
+.play-est { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; padding: 8px 12px; border-radius: var(--r); background: var(--surface-2); border: 1px solid var(--line); }
+.play-est strong { font-size: 1.1rem; }
+.play-log { max-height: 520px; overflow: auto; padding: 8px 12px; font: .8rem/1.6 var(--font-mono); white-space: pre-wrap; word-break: break-all; border-top: 1px solid var(--line); background: var(--surface); }
+.play-log > div.hd { margin-top: 6px; font-weight: 700; color: var(--accent); }
+.play-log > div.rd { color: var(--muted); }
+.play-log > div.new { background: color-mix(in oklab, var(--accent-soft) 60%, transparent); }

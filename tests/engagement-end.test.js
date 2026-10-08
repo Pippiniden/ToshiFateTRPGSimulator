@@ -175,6 +175,38 @@ for (const a of servants) for (const b of servants) {
   for (const k of ['判定に5までの補正値（攻撃', '判定に5までの補正値（防御', '振り直し+3（防御']) if (!seen[k]) fail('令呪', `「${k}）」が一度も使われていない`);
 }
 
+// 手動プレイ：毎回AIのおすすめを選ぶとAI同士の戦闘と同じログになる／ランダムに選んでも最後まで進む
+{
+  const rnd = E.mulberry32(5);
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  for (const sc of P.scenarios) {
+    const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: sc });
+    for (const [teams, seed] of [[{ 0: {} }, 1], [{ 1: {} }, 2], [{ 0: { ex: 'self' }, 1: { cs: 'ai' } }, 3]]) {
+      const choices = []; let r;
+      for (let k = 0; k < 2000; k++) { r = E.playManual(C, { seed, teams, choices }); if (r.done) break; choices.push(r.q.ai); }
+      const B = E.runBattle(C, E.mulberry32(E.seedFor(seed, 0)), true);
+      if (!r.done || B.log.join('\n') !== r.log.join('\n')) fail('手動プレイ', `${sc.name}：AIのおすすめを選び続けてもAI同士の戦闘と一致しない`);
+      battles++;
+    }
+    const choices = []; let r;
+    try {
+      for (let k = 0; k < 3000; k++) {
+        r = E.playManual(C, { seed: 4, teams: { 0: { ex: 'self' }, 1: { ex: 'self' } }, choices });
+        if (r.done) break;
+        const q = r.q;
+        if (q.kind === 'action') {
+          const a = pick(q.units);
+          const plan = rnd() < 0.03 ? { pass: true } : { actor: a.id, type: pick(a.types).key, target: pick(q.targets).id, sup: q.support ? q.units.filter((u) => u.id !== a.id && rnd() < 0.5).map((u) => u.id) : [] };
+          if (!plan.pass && !q.estimate(plan)) fail('手動プレイ', `${sc.name}：見込みを計算できない行動`);
+          choices.push(plan);
+        } else choices.push(pick(q.options.filter((o) => !o.disabled)).id);
+      }
+      if (!r.done) fail('手動プレイ', `${sc.name}：ランダムな選択で終わらない`);
+    } catch (e) { fail('手動プレイ', `${sc.name}：ランダムな選択でエラー ${e.message}`); }
+    battles++;
+  }
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
-console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替え・令呪の使い方に問題なし');
+console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替え・令呪の使い方・手動プレイに問題なし');
