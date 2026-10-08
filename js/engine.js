@@ -262,6 +262,8 @@
       rules, stateDefs, teams, warnings, charByName,
       rounds: scn.rounds || { mode: 'teams', value: 2 },
       maxEngagements: Math.max(1, +scn.maxEngagements || 1),
+      // 総当たりなどで要因を外して比べる用（英雄点・令呪コストの計算には影響しない）
+      exclude: { summon: !!(scn.exclude && scn.exclude.summon), np: !!(scn.exclude && scn.exclude.np) },
     };
   }
 
@@ -1660,7 +1662,17 @@
     u.exLeft = u.exMax;
     u.hp = u.maxHp;
     for (const r of ch.resources || []) { u.res[r.key] = +r.max; u.resMax[r.key] = +r.max; }
-    for (const sk of ch.skills || []) u.insts.push(newInst(sk, u, false));
+    const ex = (B.C && B.C.exclude) || {};
+    for (let sk of ch.skills || []) {
+      if (ex.np && sk.kind === 'np') continue;
+      if (ex.summon && (sk.blocks || []).some((b) => (b.effects || []).some((e) => e.type === 'summon'))) {
+        // 召喚を含むブロックごと外す（王の軍勢の陣地破壊なども召喚と一体なので一緒に外す）
+        const blocks = sk.blocks.filter((b) => !(b.effects || []).some((e) => e.type === 'summon'));
+        if (!blocks.length) continue;
+        sk = Object.assign({}, sk, { blocks });
+      }
+      u.insts.push(newInst(sk, u, false));
+    }
     u.v = makeUnitView(B, u);
     Object.defineProperty(u, '_B', { value: B, enumerable: false });
     return u;

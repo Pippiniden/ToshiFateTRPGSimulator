@@ -137,6 +137,24 @@ for (const a of servants) for (const b of servants) {
   if (a !== b) fail('援護の既定値', `テストケース ${a}勝 と、援護未指定の同じ対戦 ${b}勝 が一致しない`);
 }
 
+// 総当たりの要因の切り替え：乗騎・召喚なし／宝具なし
+{
+  const sc = P.scenarios.find((x) => x.name.startsWith('イスカンダル'));
+  const npNames = new Set(P.characters.flatMap((c) => (c.skills || []).filter((s) => s.kind === 'np').map((s) => s.name)));
+  for (const [label, exclude, bad] of [
+    ['乗騎・召喚なし', { summon: true }, (l) => /を(\d+体)?召喚/.test(l)],
+    ['宝具なし', { np: true }, (l) => [...npNames].some((n) => l.includes('「' + n + '」') || l.includes('［' + n) || l.includes('・' + n))],
+  ]) {
+    const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: Object.assign({}, sc, { exclude }) });
+    for (let i = 0; i < 100; i++) {
+      const B = E.runBattle(C, E.mulberry32(E.seedFor(13, i)), true);
+      const l = B.log.find(bad);
+      if (l) { fail(label, `外したはずの効果が出ている：${l.trim()}`); break; }
+      battles++;
+    }
+  }
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
-console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値に問題なし');
+console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替えに問題なし');
