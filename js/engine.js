@@ -712,7 +712,7 @@
   }
 
   function rollText(r) {
-    return `${r.value}（${r.count}D${r.faces}${r.exUsed ? '・EX振り直し' : ''}${r.csReroll ? '・令呪で振り直し' : ''}）`;
+    return `${r.value}（${r.count}D${r.faces}${r.csNote ? '・' + r.csNote : ''}${r.exUsed ? '・EX振り直し' : ''}${r.csReroll ? '・令呪で振り直し' : ''}）`;
   }
 
   // ------------------------------------------------------------------
@@ -760,6 +760,41 @@
     const x = rerollPlus3(B, r);
     r.value = rollDice(B, x.count, x.faces); r.count = x.count; r.faces = x.faces; r.plus += 3; r.csReroll = true;
   }
+  /** 正規近似で「値 >= need」となる確率 */
+  function pAtLeast(mu, v, need) {
+    const sd = Math.sqrt(Math.max(0, v));
+    return sd > 0 ? 1 - Phi((need - 0.5 - mu) / sd) : (mu >= need ? 1 : 0);
+  }
+  /** 令呪の判定前の上乗せ（5までの補正値／ダイス面数+1）を入れた場合の判定の分布 */
+  function csPreDist(B, u, P, statKey, kind) {
+    const Q = Object.assign({}, P, {
+      upTo: P.upTo.concat(kind === 'plus5' ? [5] : kind === 'plus3' ? [3] : []),
+      facePos: (P.facePos || 0) + (kind === 'face1' ? 1 : 0),
+    });
+    return rollEstimate(B, u, Q, statKey);
+  }
+  function applyCsPre(P, kind) {
+    if (kind === 'plus5') P.upTo.push(5); else if (kind === 'face1') P.facePos = (P.facePos || 0) + 1;
+  }
+  const CS_PRE_LABEL = { plus5: '判定に5までの補正値', face1: 'ダイス面数+1' };
+  /** 判定前に使う令呪の候補のうち、成功率が最も高いもの */
+  function bestCsPre(B, u, P, statKey, prob) {
+    let best = null;
+    for (const kind of ['plus5', 'face1']) {
+      const d = csPreDist(B, u, P, statKey, kind);
+      const p = prob(d);
+      if (!best || p > best.p) best = { kind, p };
+    }
+    return best;
+  }
+  function csThresholds(B, team) {
+    return B.teams[team].csAI === 'aggressive' ? { gain: 0.1, min: 0.25 } : { gain: 0.2, min: 0.4 };
+  }
+  /** 倒せばその陣営のサーヴァントが全滅するか（最後の1画を使ってよい場面） */
+  function lastEnemyServant(B, t) {
+    return !B.teams[t.team].units.some((x) => x !== t && x.alive && isServantUnit(B, x));
+  }
+
   /** 自陣営の手番開始時：回復・宝具回数の回復 */
   function csTurnStart(B, team) {
     if (!csOn(B) || team.csOff) return;
@@ -1360,16 +1395,39 @@
     const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: finalTarget, extra: support ? support.value : 0, negate: incomingNegation(B, finalTarget, attacker) });
     const targets = A.aoe ? enemiesFront(B, attacker) : [finalTarget];
     if (A.territoryBreak) territoryBreak(B, A.territoryBreak);
+    // 令呪：撃破を狙う攻撃（判定前の「5までの補正値」「面数+1」、判定後の「振り直し+3」）
+    let csAtk = null;
+    const t0 = !A.aoe ? targets[0] : null;
+    // 戦闘続行などで耐えられる相手でも、致死量を通せば耐える手段を使わせられるので同じ基準で使う
+    const hAtk = t0 && !t0.summoned && !t0.tags.has('乗騎') ? csHolder(B, attacker) : null;
+    if (hAtk) {
+      const D0 = prepareRoll(B, t0, 'defend', { type: typeKey, opp: attacker, dry: true, negate: A.negate });
+      const de = rollEstimate(B, t0, D0, A.defStat || T.defStat);
+      const needDmg = t0.hp * (isMasterHalf(B, attacker, t0) ? 2 : 1);
+      const pKill = (d) => pAtLeast(d.mean - de.mean, d.var + de.var, needDmg);
+      const th = csThresholds(B, attacker.team);
+      const p0 = pKill(rollEstimate(B, attacker, A, T.atkStat));
+      const pR = pKill(csPreDist(B, attacker, A, T.atkStat, 'plus3'));
+      const pPlan = p0 + (1 - p0) * (pR >= th.min ? pR : 0); // 外れたら振り直す前提
+      const pre = bestCsPre(B, attacker, A, T.atkStat, pKill);
+      csAtk = { de, needDmg, th, p0 };
+      if (pre && pre.p > pPlan && pre.p - p0 >= th.gain && pre.p >= th.min
+        && csAllow(B, attacker, hAtk, 1, pre.p >= 0.6 && lastEnemyServant(B, t0))) {
+        csSpend(B, hAtk, 1, CS_PRE_LABEL[pre.kind] + '（攻撃）', attacker);
+        applyCsPre(A, pre.kind);
+        csAtk.used = pre.kind;
+      }
+    }
     const atk = executeRoll(B, attacker, A, T.atkStat);
-    // 令呪：攻撃の振り直し（積極的に使う陣営のみ）
-    if (!A.aoe && targets[0] && B.teams[attacker.team].csAI === 'aggressive') {
-      const h = csHolder(B, attacker);
-      const t0 = targets[0];
-      if (h && isServantUnit(B, t0) && atk.value < (atk.count * (atk.faces + 1)) / 2) {
-        const D0 = prepareRoll(B, t0, 'defend', { type: typeKey, opp: attacker, dry: true, negate: A.negate });
-        const de = rollEstimate(B, t0, D0, A.defStat || T.defStat);
-        const x = rerollPlus3(B, atk);
-        if (x.mean - de.mean >= t0.hp * 0.8 && csAllow(B, attacker, h, 1, false)) { csSpend(B, h, 1, '振り直し+3（攻撃）', attacker); doCsReroll(B, atk); }
+    if (csAtk && csAtk.used) atk.csNote = csAtk.used === 'plus5' ? '令呪+5' : '令呪で面数+1';
+    if (csAtk && !csAtk.used && hAtk && csHolder(B, attacker)) {
+      const { de, needDmg, th } = csAtk;
+      const pNow = pAtLeast(atk.value - de.mean, de.var, needDmg);
+      const x = rerollPlus3(B, atk);
+      const pR = pAtLeast(x.mean - de.mean, x.sd * x.sd + de.var, needDmg);
+      if (pR - pNow >= th.gain && pR >= th.min && csAllow(B, attacker, csHolder(B, attacker), 1, pR >= 0.6 && lastEnemyServant(B, t0))) {
+        csSpend(B, csHolder(B, attacker), 1, '振り直し+3（攻撃）', attacker);
+        doCsReroll(B, atk);
       }
     }
     attacker.attacks++;
@@ -1394,7 +1452,26 @@
         const eDmg = Math.max(0, atk.value - de.mean) / (half ? 2 : 1);
         if (eDmg >= t.hp && csAllow(B, t, mh, 1, true)) { csSpend(B, mh, 1, 'マスターの判定+5', t); D.upTo.push(5); }
       }
+      // 令呪（サーヴァント用）：このままでは致命傷になりやすく、判定前の上乗せの方が「外れたら振り直す」より生き残りやすい時
+      let csDefNote = null;
+      const hd = csHolder(B, t);
+      if (hd) {
+        const need = atk.value - t.hp * (half ? 2 : 1) + 1;
+        const pSurv = (d) => pAtLeast(d.mean, d.var, need);
+        const p0 = pSurv(rollEstimate(B, t, D, defStat));
+        if (p0 < 0.9) {
+          const pR = pSurv(csPreDist(B, t, D, defStat, 'plus3'));
+          const pPlan = p0 + (1 - p0) * (pR >= 0.3 ? pR : 0);
+          const pre = bestCsPre(B, t, D, defStat, pSurv);
+          if (pre && pre.p > pPlan + 0.02 && pre.p >= 0.3 && csAllow(B, t, hd, 1, true)) {
+            csSpend(B, hd, 1, CS_PRE_LABEL[pre.kind] + '（防御）', t);
+            applyCsPre(D, pre.kind);
+            csDefNote = pre.kind === 'plus5' ? '令呪+5' : '令呪で面数+1';
+          }
+        }
+      }
       const def = executeRoll(B, t, D, defStat);
+      if (csDefNote) def.csNote = csDefNote;
       // 令呪（サーヴァント用）：致命傷なら防御を振り直して+3
       const lethal = (v) => Math.floor(Math.max(0, atk.value - v) / (half ? 2 : 1)) >= t.hp;
       if (lethal(def.value)) {

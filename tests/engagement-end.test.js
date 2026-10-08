@@ -155,6 +155,26 @@ for (const a of servants) for (const b of servants) {
   }
 }
 
+// 令呪：判定前の補正値・面数、振り直しを使っても、持っている画数を超えて使わない
+{
+  const seen = {};
+  for (const sc of P.scenarios) {
+    const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: sc });
+    for (let i = 0; i < 100; i++) {
+      const B = E.runBattle(C, E.mulberry32(E.seedFor(17, i)), true);
+      for (const t of B.teams) for (const u of t.units) {
+        if ((u.res.cs || 0) < 0 || (u.csPool || 0) < 0) fail('令呪', `${sc.name}：${u.name} の令呪が負になった`);
+      }
+      for (const l of B.log) {
+        const m = l.match(/令呪（(.+?)）/); if (m) seen[m[1]] = true;
+        if (/令呪\+5|令呪で面数\+1/.test(l) && !/[攻防]/.test(l)) fail('令呪', `判定の表示が不正：${l.trim()}`);
+      }
+      battles++;
+    }
+  }
+  for (const k of ['判定に5までの補正値（攻撃', '判定に5までの補正値（防御', '振り直し+3（防御']) if (!seen[k]) fail('令呪', `「${k}）」が一度も使われていない`);
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
-console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替えに問題なし');
+console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替え・令呪の使い方に問題なし');
