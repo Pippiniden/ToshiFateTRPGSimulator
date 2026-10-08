@@ -207,6 +207,32 @@ for (const a of servants) for (const b of servants) {
   }
 }
 
+// 手動プレイ：行動の画面で宝具を「使う／使わない」と決めたら、その通りになり、あとから確認が出ない
+{
+  const sc = P.scenarios.find((x) => x.name.startsWith('アルトリア vs'));
+  const C = E.compileScenario({ rules: P.rules, characters: P.characters, states: P.states, scenario: sc });
+  for (const want of [true, false]) {
+    const choices = []; let r; let decided = false;
+    for (let k = 0; k < 60; k++) {
+      r = E.playManual(C, { seed: 7, teams: { 0: { cs: 'ai', ex: 'ai' } }, choices });
+      if (r.done) break;
+      if (r.q.kind === 'action' && !decided) {
+        const plan = Object.assign({}, r.q.ai, { use: {} });
+        const list = r.q.skills(plan);
+        const np = list.find((x) => x.np && x.ok);
+        if (!np) { fail('手動プレイの宝具', '行動の画面に約束された勝利の剣が出ない'); break; }
+        for (const x of list) if (x.ok) plan.use[x.key] = want && x === np;
+        choices.push(plan); decided = true; continue;
+      }
+      if (decided && r.q.kind === 'skill' && r.q.title.includes('約束された勝利の剣') && !r.log.some((l) => /^アルトリア・ペンドラゴン →/.test(l))) fail('手動プレイの宝具', '行動の画面で決めたのに、同じ攻撃で確認が出た');
+      choices.push(r.q.ai);
+    }
+    const line = r.log.find((l) => /^アルトリア・ペンドラゴン →/.test(l)) || '';
+    if (line.includes('約束された勝利の剣') !== want) fail('手動プレイの宝具', `「使う=${want}」が反映されていない：${line}`);
+    battles++;
+  }
+}
+
 console.log(`戦闘 ${battles} 回、交戦フェイズの境目 ${boundaries} 回を検査`);
 if (failures.length) { console.log('NG:\n  ' + failures.join('\n  ')); process.exit(1); }
 console.log('OK：交戦フェイズ終了処理・攻撃対象の変更・援護の既定値・総当たりの要因切り替え・令呪の使い方・手動プレイに問題なし');

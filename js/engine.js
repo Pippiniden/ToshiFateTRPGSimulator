@@ -604,7 +604,13 @@
       if (ctx.shared && ctx.shared.some((sh) => sh.inst === c.inst)) continue;
       if (!canUse(c.inst)) continue;
       if (c.inst.def.kind === 'np' && !c.inst.isState && chosen.some((x) => x.owner === c.owner && x.inst.def.kind === 'np' && !x.inst.isState)) continue;
-      if (isLimited(c.inst)) {
+      const useKey = c.owner.id + '|' + c.inst.def.name;
+      const preset = isLimited(c.inst) && ctx.use && Object.prototype.hasOwnProperty.call(ctx.use, useKey) ? !!ctx.use[useKey] : null;
+      if (preset === false) continue;
+      if (isLimited(c.inst) && preset === true) {
+        const rk = c.inst.def.resource && c.inst.def.resource.key;
+        if (rk && chosen.some((x) => x.inst.owner === c.inst.owner && x.inst.def.resource && x.inst.def.resource.key === rk)) continue;
+      } else if (isLimited(c.inst)) {
         if (ctx.dry) {
           const pol = (c.inst.def.ai && c.inst.def.ai.policy) || 'asap';
           if (pol !== 'asap') continue;
@@ -935,9 +941,9 @@
   // ------------------------------------------------------------------
   function attackTypeDef(B, key) { return B.rules.attackTypes.find((t) => t.key === key); }
 
-  function quickDamage(B, attacker, typeKey, target, extraFixed, addFixed) {
+  function quickDamage(B, attacker, typeKey, target, extraFixed, addFixed, use) {
     const T = attackTypeDef(B, typeKey);
-    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, dry: true, negate: incomingNegation(B, target, attacker) });
+    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, dry: true, negate: incomingNegation(B, target, attacker), use });
     if (extraFixed !== undefined) A.fixed = extraFixed;
     if (addFixed) A.fixed += addFixed;
     const ae = rollEstimate(B, attacker, A, T.atkStat);
@@ -1504,17 +1510,17 @@
     return { value: getStat(B, s, T.atkStat) + extra, applied: P.applied };
   }
 
-  function performAttack(B, attacker, typeKey, target, support) {
+  function performAttack(B, attacker, typeKey, target, support, use) {
     const T = attackTypeDef(B, typeKey);
     // 攻撃対象の変更（カリスマ・令呪など）を先に確定し、攻撃側のスキル・条件は変更後の相手に対して評価する
-    const pre = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, extra: support ? support.value : 0, dry: true, negate: incomingNegation(B, target, attacker) });
+    const pre = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: target, extra: support ? support.value : 0, dry: true, negate: incomingNegation(B, target, attacker), use });
     let redirectPost = null;
     let finalTarget = target;
     if (!pre.aoe) {
       if (!pre.noRedirect) { const r = handleRedirect(B, attacker, target, typeKey, support ? support.value : 0); finalTarget = r.target; redirectPost = r.post; }
       finalTarget = csRedirect(B, attacker, typeKey, finalTarget);
     }
-    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: finalTarget, extra: support ? support.value : 0, negate: incomingNegation(B, finalTarget, attacker) });
+    const A = prepareRoll(B, attacker, 'attack', { type: typeKey, opp: finalTarget, extra: support ? support.value : 0, negate: incomingNegation(B, finalTarget, attacker), use });
     const targets = A.aoe ? enemiesFront(B, attacker) : [finalTarget];
     if (A.territoryBreak) territoryBreak(B, A.territoryBreak);
     // 令呪：撃破を狙う攻撃（判定前の「5までの補正値」「面数+1」、判定後の「振り直し+3」）
@@ -1763,9 +1769,9 @@
           sp.actionsLeft--;
           return { unit: sp, value: sb.value, applied: sb.applied };
         });
-        performAttack(B, actor, plan.type, target, { list: sups, value: sups.reduce((x, y) => x + y.value, 0) });
+        performAttack(B, actor, plan.type, target, { list: sups, value: sups.reduce((x, y) => x + y.value, 0) }, plan.use);
       } else {
-        performAttack(B, actor, plan.type, target, null);
+        performAttack(B, actor, plan.type, target, null, plan.use);
       }
       actor.actionsLeft--;
       pending = pending.filter((u) => u.actionsLeft > 0);
@@ -1797,10 +1803,72 @@
           const v = supportBonus(B, s, plan.type, t, true).value;
           extra += v; sups.push({ name: s.name, value: v });
         }
-        const q = quickDamage(B, a, plan.type, t, undefined, extra);
+        const q = quickDamage(B, a, plan.type, t, undefined, extra, plan.use);
         return { E: q.E, killP: q.killP, aoe: q.aoe, support: extra, sups };
       },
+      /** 選んだ攻撃役・種類・対象で使える回数制限つきの宝具・スキル（使えないものは理由つき） */
+      skills(plan) {
+        const a = pending.find((u) => u.id === plan.actor);
+        const t = a && enemyOf(a).find((u) => u.id === plan.target);
+        if (!a || !t) return [];
+        let extra = 0;
+        for (const id of plan.sup || []) { const s = pending.find((u) => u.id === id); if (s && s !== a) extra += supportBonus(B, s, plan.type, t, true).value; }
+        return attackSkillList(B, a, plan.type, t, extra);
+      },
     };
+  }
+
+  const WHEN_TEXT = {
+    turnStart: '自分の手番の開始時に、使うか確認します', engagementStart: '交戦フェイズの開始時に確認します', movePhase: '移動フェイズに確認します',
+    defend: '防御する時に、使うか確認します', allyDefend: '味方が防御する時に、使うか確認します', allyAttacked: '相手の攻撃時に、使うか確認します',
+    lethal: 'HPが0になる時に自動で使います', action: '手番の行動の前に、使うか確認します', support: '援護する時に、使うか確認します',
+    tookDamage: 'ダメージを受けた後に確認します', dealtDamage: 'ダメージを与えた後に確認します', roundEnd: '巡の終了時に確認します', engagementEnd: '交戦フェイズ終了時に確認します',
+    battleStart: '戦闘開始時に自動', static: '常時',
+  };
+  function leftText(inst) {
+    const d = inst.def, u = inst.owner;
+    if (d.resource && d.resource.key) return `${/^np/.test(d.resource.key) ? '宝具回数' : d.resource.key} ${u.res[d.resource.key] || 0}/${u.resMax[d.resource.key] || 0}`;
+    if (d.uses && +d.uses.max > 0) return `残り${+d.uses.max - (inst.used[d.uses.per || 'battle'] || 0)}回`;
+    if (inst.charges !== null) return `残り${inst.charges}回`;
+    return '';
+  }
+  function attackSkillList(B, a, typeKey, t, extra) {
+    const out = [];
+    const typeName = (k) => (attackTypeDef(B, k) || { name: k }).name;
+    for (const o of [a].concat(allies(B, a).filter((x) => x !== a))) {
+      for (const inst of o.insts) {
+        if (inst.isState || !isLimited(inst)) continue;
+        const timing = o === a ? 'attack' : 'allyAttack';
+        const key = o.id + '|' + inst.def.name;
+        const base = { key, name: inst.def.name, owner: o.name, self: o === a, np: inst.def.kind === 'np', left: leftText(inst), note: inst.def.note || '' };
+        const all = (inst.def.blocks || []).filter((b) => (b.timings || []).includes(timing));
+        if (!all.length) {
+          if (o === a && inst.def.kind === 'np') {
+            const ts = [...new Set((inst.def.blocks || []).flatMap((b) => b.timings || []))];
+            out.push(Object.assign(base, { ok: false, other: true, reason: ts.length ? ts.map((x) => WHEN_TEXT[x] || ((TIMING_LABEL[x] || x) + 'に確認します')).join('／') : 'このシミュレーターでは効果なし（メモ参照）' }));
+          }
+          continue;
+        }
+        const types = [...new Set(all.flatMap((b) => b.types || []))];
+        let reason = null;
+        if (!canUse(inst)) reason = inst.def.resource && inst.def.resource.key && (o.res[inst.def.resource.key] || 0) < (+inst.def.resource.amount || 1) ? '回数が残っていない' : '使用回数が残っていない';
+        else if (types.length && !types.includes(typeKey)) reason = types.map(typeName).join('・') + '攻撃でのみ使えます';
+        else if (!matchBlocks(B, inst, timing, { type: typeKey, opp: t }, a).length) reason = '今は条件を満たしていません';
+        let ai = false;
+        if (!reason) {
+          const P = prepareRoll(B, a, 'attack', { type: typeKey, opp: t, dry: true, extra });
+          const bl = matchBlocks(B, inst, timing, { type: typeKey, opp: t }, a);
+          ai = aiWantsAuto(B, inst, buildAiInfo(B, P, a, 'attack', { type: typeKey, opp: t }, { inst, owner: o, blocks: bl }, []));
+        }
+        const w = reason ? 0 : sumModsOfBlocks(B, o, a, t, matchBlocks(B, inst, timing, { type: typeKey, opp: t }, a));
+        out.push(Object.assign(base, { ok: !reason, reason, ai, w }));
+      }
+    }
+    // 宝具は1回の判定に1つ（同じ持ち主）：AIのおすすめも効果の大きい1つに絞る
+    const best = new Map();
+    for (const x of out) if (x.np && x.ok && x.ai && (!best.has(x.owner) || x.w > best.get(x.owner).w)) best.set(x.owner, x);
+    for (const x of out) if (x.np && x.ok && x.ai && best.get(x.owner) !== x) x.ai = false;
+    return out;
   }
 
   /**

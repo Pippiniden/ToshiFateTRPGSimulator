@@ -1867,13 +1867,13 @@
       const ai = q.ai;
       const sup = {};
       for (const id of ai.sup || []) { const g = groupOf(id); if (g) sup[g.name] = (sup[g.name] || 0) + 1; }
-      UI.playForm = { key, actor: (groupOf(ai.actor) || groups[0]).name, type: ai.type, target: ai.target, sup, dirty: false };
+      UI.playForm = { key, actor: (groupOf(ai.actor) || groups[0]).name, type: ai.type, target: ai.target, sup, dirty: false, use: {} };
     }
     const F = UI.playForm;
     const actorG = groups.find((g) => g.name === F.actor) || groups[0];
     if (!actorG.types.some((t) => t.key === F.type)) F.type = actorG.types[0] && actorG.types[0].key;
-    const planOf = () => {
-      if (!F.dirty) return q.ai;
+    const basePlan = () => {
+      if (!F.dirty) return Object.assign({}, q.ai);
       const actor = actorG.ids[0];
       const sup = [];
       for (const g of groups) {
@@ -1881,6 +1881,18 @@
         sup.push(...g.ids.filter((id) => id !== actor).slice(0, n));
       }
       return { actor, type: F.type, target: F.target, sup };
+    };
+    // この攻撃で使える宝具・スキル（チェックの初期値はAIのおすすめ）
+    const plan0 = basePlan();
+    let skills = [];
+    try { skills = q.skills ? q.skills(plan0) : []; } catch (e) { skills = []; }
+    const checked = (x) => (Object.prototype.hasOwnProperty.call(F.use, x.key) ? F.use[x.key] : x.ai);
+    const planOf = () => {
+      const p = basePlan();
+      const use = {};
+      for (const x of skills) if (x.ok) use[x.key] = !!checked(x);
+      if (skills.some((x) => x.ok)) p.use = use;
+      return p;
     };
     const touch = () => { F.dirty = true; render(); };
     const wrap = h('div', { class: 'stack', style: { gap: '10px' } });
@@ -1908,6 +1920,29 @@
         }
       }
       wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, '援護（援護した味方はこの手番の行動を使います）'), sb));
+    }
+    if (skills.length) {
+      const sk = h('div', { class: 'play-skills' });
+      for (const x of skills) {
+        const tag = h('span', { class: 'pill ' + (x.np ? 'np' : 'skill') }, x.np ? '宝具' : 'スキル');
+        const who = x.self ? null : h('span', { class: 'small muted' }, `（${x.owner}）`);
+        if (x.ok) {
+          const c = h('input', { type: 'checkbox', checked: !!checked(x) });
+          c.addEventListener('change', () => {
+            F.use[x.key] = c.checked;
+            // 宝具は1回の判定に1つ（同じ持ち主）
+            if (c.checked && x.np) for (const y of skills) if (y !== x && y.np && y.owner === x.owner && y.ok) F.use[y.key] = false;
+            render();
+          });
+          sk.append(h('label', { class: 'play-skill' }, c, tag, h('span', { class: 'nm' }, x.name), who,
+            x.left ? h('span', { class: 'small muted num' }, x.left) : null,
+            x.ai ? h('span', { class: 'rec-mini' }, 'AIのおすすめ') : null));
+        } else {
+          sk.append(h('div', { class: 'play-skill off' }, h('input', { type: 'checkbox', disabled: true, 'aria-hidden': 'true' }), tag, h('span', { class: 'nm' }, x.name), who,
+            x.left ? h('span', { class: 'small muted num' }, x.left) : null, h('span', { class: 'small muted' }, '— ' + x.reason)));
+        }
+      }
+      wrap.append(h('div', { class: 'stack', style: { gap: '4px' } }, h('h4', null, 'この攻撃で使う宝具・スキル'), sk));
     }
     const plan = planOf();
     let est = null;
@@ -1945,7 +1980,7 @@
         h('li', null, '「テスト実行」でテストケースを選び、陣営にキャラクターを配置します（前衛・後衛、倒れたら負けになる「要」）。'),
         h('li', null, '試行回数とシードを決めて「シミュレーション実行」。勝率、巡数の分布、キャラ別の死亡率・ダメージ、スキルの使用回数、詳細ログが出ます。'),
         h('li', null, '数値を変えて再実行し、「比較用に保存」で案同士を並べます。'),
-        h('li', null, '「手動プレイ」で、テストケースの陣営を自分で操作して1戦できます（片方だけでも両方でも）。行動・援護・宝具などの回数制限スキル・攻撃対象の変更・令呪・EX振り直しを選べ、場面ごとにAIのおすすめと期待ダメージ・撃破率の目安を表示します。同じシードなら同じダイスなので、「一手戻す」で別の選択を試せます。'),
+        h('li', null, '「手動プレイ」で、テストケースの陣営を自分で操作して1戦できます（片方だけでも両方でも）。行動・援護・宝具などの回数制限スキル・攻撃対象の変更・令呪・EX振り直しを選べ（攻撃で使う宝具は行動の画面で選び、使えない宝具には理由を表示）、場面ごとにAIのおすすめと期待ダメージ・撃破率の目安を表示します。同じシードなら同じダイスなので、「一手戻す」で別の選択を試せます。'),
         h('li', null, '「比較・スイープ・総当たり」で、HPや補正値を範囲で動かした勝率曲線や、キャラ同士の相性表を作れます。総当たりは援護・乗騎・召喚・宝具・令呪・陣地・同盟の有り無しを切り替えて、どの要因で勝率が動くかを比べられます。')),
       h('h3', null, '用語と再現している範囲'),
       h('p', null, 'ターン＝移動・遭遇・交戦の全フェイズの一巡り、フェイズ＝移動・遭遇・交戦それぞれ、巡＝交戦フェイズ内の手番の一巡り。シミュレーターは各ターンの交戦フェイズだけを戦わせます。決着しなければ次のターンの交戦フェイズへ進み、その間の移動フェイズの効果（被虐の誉れの回復など）だけを処理します。'),
