@@ -1541,6 +1541,36 @@
     UI.running = false; render();
   }
 
+  // 総当たりの条件（要因の有り無し）
+  const RR_FACTORS = [
+    ['support', '援護', true, '味方の前衛が2体以上いる時の援護（王の軍勢・ペガサスなどの召喚体が召喚者を援護する）'],
+    ['summon', '乗騎・召喚', true, '騎乗スキルの乗騎、王の軍勢、魔神柱など、召喚を含む効果。外すとその効果のブロックごと使わない'],
+    ['np', '宝具', true, '宝具を使う。外すと宝具なしの素の性能で比べる'],
+    ['cs', '令呪', true, '英雄点から計算した初期令呪（マスター不在の総当たりでは仮想の令呪）。宝具回数の回復・振り直し・HP回復など'],
+    ['territory', '陣地', true, '陣地作成を持つキャラは自陣（陣営フラグ「陣地」）で戦う。相手の陣地破壊で消える'],
+    ['alliance', '同盟', false, '両陣営に陣営フラグ「同盟」を付ける（アヴェンジャーの忘却補正などが変わる）'],
+  ];
+  function rrOpts(R) {
+    R.opts = R.opts || {};
+    for (const [k, , def] of RR_FACTORS) if (R.opts[k] === undefined) R.opts[k] = def;
+    return R.opts;
+  }
+  function rrOptsLabel(o) {
+    const on = RR_FACTORS.filter(([k]) => o[k]).map(([, l]) => l);
+    const off = RR_FACTORS.filter(([k, , def]) => !o[k] && def).map(([, l]) => l);
+    return (on.length ? 'あり：' + on.join('、') : '') + (off.length ? '　なし：' + off.join('、') : '');
+  }
+  /** 陣地作成など、陣営フラグ「陣地」で効果が変わるスキルを持つか */
+  function usesTerritory(c) {
+    return (c.skills || []).some((sk) => /^陣地作成/.test(sk.name || '') || (sk.blocks || []).some((b) => JSON.stringify(b.cond || '').includes("teamFlag('陣地')")));
+  }
+  function rrTeam(c, o, name) {
+    const flags = [];
+    if (o.territory && usesTerritory(c)) flags.push('陣地');
+    if (o.alliance) flags.push('同盟');
+    return { name, flags: flags.join(','), support: !!o.support, csMode: o.cs ? 'auto' : 'none', members: [{ charId: c.id, pos: 'front' }] };
+  }
+
   function rrPanel() {
     const R = UI.rr;
     const pool = D.characters;
@@ -1561,12 +1591,17 @@
       btn('全選択', () => { R.ids = pool.map((c) => c.id); save(); render(); }, 'ghost sm'),
       btn('全解除', () => { R.ids = []; save(); render(); }, 'ghost sm'),
       h('span', { class: 'small muted' }, `${R.ids.length}体 → ${(R.ids.length * (R.ids.length - 1)) / 2}組`)));
+    const O = rrOpts(R);
+    p.append(h('div', { class: 'stack', style: { gap: '4px' } },
+      h('div', { class: 'small muted' }, '考慮する要因'),
+      h('div', { class: 'row', role: 'group', 'aria-label': '考慮する要因' }, RR_FACTORS.map(([k, label, , title]) => chk(O, k, label, { title })))));
     p.append(h('div', { class: 'grid' }, field('1組あたりの試行回数', num(R, 'trials', { min: 10, step: 50 })), field('最大ターン数', num(R, 'maxEngagements', { min: 1 }))));
     p.append(h('div', { class: 'run-bar' }, btn('総当たり実行', runRR, 'primary', { disabled: UI.running ? true : null }), UI.running ? btn('中止', () => Runner.cancel(), 'danger') : null, h('span', { id: 'rr-progress', class: 'small muted num' })));
     const r = UI.rrResult;
     if (r && r.error) p.append(h('div', { class: 'notice err' }, r.error));
     else if (r) {
       const order = r.names.map((n, i) => i).sort((a, b) => r.avg[b] - r.avg[a]);
+      if (r.opts) p.append(h('div', { class: 'small muted' }, '条件　' + rrOptsLabel(r.opts)));
       p.append(h('h3', null, '平均勝率ランキング'));
       p.append(h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
         h('thead', null, h('tr', null, h('th', { class: 'n' }, '順位'), h('th', null, 'キャラクター'), h('th', { class: 'n' }, '平均勝率'), h('th', { class: 'n' }, '英雄点'), h('th', null, ''))),
@@ -1591,10 +1626,12 @@
   async function runRR() {
     const R = UI.rr;
     const ids = R.ids.slice();
+    const O = Object.assign({}, rrOpts(R));
     if (ids.length < 2) { toast('2体以上選んでください'); return; }
     const jobs = []; const pairs = [];
     for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
-      const sc = { id: 'rr', name: 'rr', teams: [{ name: 'A', support: true, members: [{ charId: ids[i], pos: 'front' }] }, { name: 'B', support: true, members: [{ charId: ids[j], pos: 'front' }] }], rounds: { mode: 'pl', value: 2 }, maxEngagements: +R.maxEngagements || 10 };
+      const ci = D.characters.find((c) => c.id === ids[i]), cj = D.characters.find((c) => c.id === ids[j]);
+      const sc = { id: 'rr', name: 'rr', teams: [rrTeam(ci, O, 'A'), rrTeam(cj, O, 'B')], rounds: { mode: 'pl', value: 2 }, maxEngagements: +R.maxEngagements || 10, exclude: { summon: !O.summon, np: !O.np } };
       jobs.push({ data: clone(scenarioData(sc)), opts: { trials: Math.max(1, +R.trials || 100), seed: 1, start: 0, logTrials: 0 } });
       pairs.push([i, j]);
     }
@@ -1610,7 +1647,7 @@
       });
       const avg = m.map((row, i) => { const v = row.filter((x, j) => j !== i && x !== null); return v.reduce((s, x) => s + x, 0) / Math.max(1, v.length); });
       const chars = ids.map((id) => D.characters.find((c) => c.id === id));
-      UI.rrResult = { names: chars.map((c) => c.name), hero: chars.map((c) => E.heroPoints(D.rules, c).total), m, avg };
+      UI.rrResult = { names: chars.map((c) => c.name), hero: chars.map((c) => E.heroPoints(D.rules, c).total), m, avg, opts: O };
     } catch (e) { if (e.message !== 'CANCELLED') UI.rrResult = { error: e.message }; }
     UI.running = false; render();
   }
@@ -1628,7 +1665,7 @@
         h('li', null, '「テスト実行」でテストケースを選び、陣営にキャラクターを配置します（前衛・後衛、倒れたら負けになる「要」）。'),
         h('li', null, '試行回数とシードを決めて「シミュレーション実行」。勝率、巡数の分布、キャラ別の死亡率・ダメージ、スキルの使用回数、詳細ログが出ます。'),
         h('li', null, '数値を変えて再実行し、「比較用に保存」で案同士を並べます。'),
-        h('li', null, '「比較・スイープ・総当たり」で、HPや補正値を範囲で動かした勝率曲線や、キャラ同士の相性表を作れます。')),
+        h('li', null, '「比較・スイープ・総当たり」で、HPや補正値を範囲で動かした勝率曲線や、キャラ同士の相性表を作れます。総当たりは援護・乗騎・召喚・宝具・令呪・陣地・同盟の有り無しを切り替えて、どの要因で勝率が動くかを比べられます。')),
       h('h3', null, '用語と再現している範囲'),
       h('p', null, 'ターン＝移動・遭遇・交戦の全フェイズの一巡り、フェイズ＝移動・遭遇・交戦それぞれ、巡＝交戦フェイズ内の手番の一巡り。シミュレーターは各ターンの交戦フェイズだけを戦わせます。決着しなければ次のターンの交戦フェイズへ進み、その間の移動フェイズの効果（被虐の誉れの回復など）だけを処理します。'),
       h('ul', null,
